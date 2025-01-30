@@ -1,94 +1,103 @@
 # SPDX-FileCopyrightText: Magenta ApS <https://magenta.dk>
 # SPDX-License-Identifier: MPL-2.0
-import importlib
-import re
-from functools import cache
+from collections.abc import Awaitable
+from collections.abc import Callable
+from functools import partial
+from textwrap import dedent
 from typing import Any
+from typing import Any
+from typing import Awaitable
+from typing import Callable
+from typing import Coroutine
+from typing import Dict
 
 from fastapi import APIRouter
-from fastapi import FastAPI
-from fastapi import Request
-from fastapi import status
-from fastapi.responses import JSONResponse
+from fastapi import Depends
 from fastapi.responses import RedirectResponse
-from structlog.stdlib import get_logger
+from fastramqpi.ramqp import AMQPSystem
+from fastramqpi.ramqp import AMQPSystem
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import PlainTextResponse
+from strawberry.printer import print_schema
+from structlog import get_logger
+
+from mora import db
+from mora import depends
+from mora.auth.keycloak.models import Token
+from mora.auth.keycloak.oidc import token_getter
+from mora.graphapi.router import CustomGraphQLRouter
+from .versioning import LATEST_VERSION
+from .versioning import Version
+from .versions.base import get_schema
+from .versions.latest.audit import get_audit_loaders
+from .versions.latest.dataloaders import get_loaders
+from ..auth.keycloak.models import Token
 
 logger = get_logger()
 
-graphql_versions = [
-    18,
-    19,
-    20,
-    21,
-    22,
-]
-latest_graphql_version = max(graphql_versions)
+
+def get_context_getter(version: Version) -> Callable[
+    [Callable[[], Awaitable[Token]], AMQPSystem, AsyncSession],
+    Coroutine[Any, Any, dict[str, Any]],
+]:  # TODO: wtf?
+    async def context_getter(
+        # NOTE: If you add or remove any parameters, make sure to keep the
+        # execute_graphql parameters synchronised!
+        get_token: Callable[[], Awaitable[Token]] = Depends(token_getter),
+        amqp_system: AMQPSystem = Depends(depends.get_amqp_system),
+        session: db.AsyncSession = Depends(db.get_session),
+    ) -> dict[str, Any]:
+        return {
+            **await get_loaders(),
+            "version": version,
+            "get_token": get_token,
+            "amqp_system": amqp_system,
+            "session": session,
+            **get_audit_loaders(session),
+        }
+
+    return context_getter
 
 
-@cache
-def load_graphql_version(version_number: int) -> APIRouter:
-    """Dynamically import and load the specified GraphQL version.
+def get_router(version: Version) -> APIRouter:
+    """Get Strawberry FastAPI router serving this GraphQL API version."""
+    schema = get_schema(version)
+    router = CustomGraphQLRouter(
+        graphql_ide="graphiql",  # TODO: pathfinder seems a lot nicer
+        is_latest=version is LATEST_VERSION,
+        schema=schema,
+        context_getter=get_context_getter(version),
+    )
 
-    Note:
-        This function should only ever be called once for each version_number.
+    @router.get("/schema.graphql", response_class=PlainTextResponse)
+    async def _schema() -> str:
+        """Return the GraphQL version's schema definition in SDL format."""
+        header = dedent(
+            f"""\
+            # SPDX-FileCopyrightText: Magenta ApS <https://magenta.dk>
+            # SPDX-License-Identifier: MPL-2.0
+            #
+            # OS2mo GraphQL API schema definition (v{version}).
+            # https://os2mo.eksempel.dk/graphql/v{version}/schema.graphql
 
-    Args:
-        version_number: The version number of the GraphQL version to load.
+            """
+        )
+        return header + print_schema(schema)
 
-    Returns:
-        A FastAPI APIRouter for the given GraphQL version.
-    """
-    assert version_number in graphql_versions
-
-    version = importlib.import_module(
-        f"mora.graphapi.versions.v{version_number}.version"
-    ).GraphQLVersion
-    # TODO: Add deprecation header as per the decision log (link/successor)
-    router = version.get_router(is_latest=version_number is latest_graphql_version)
     return router
 
 
-def setup_graphql(app: FastAPI) -> None:
-    """Setup our GraphQL endpoints on FastAPI.
+router = APIRouter()
 
-    Note:
-        GraphQL version endpoints are dynamically loaded.
 
-    Args:
-        app: The FastAPI to load GraphQL endpoints on.
-    """
+@router.get("/graphql")
+@router.get("/graphql/")
+async def redirect_to_latest_graphiql() -> RedirectResponse:
+    """Redirect unversioned GraphiQL so developers can pin to the newest version."""
+    return RedirectResponse(f"/graphql/v{LATEST_VERSION.value}")
 
-    @app.get("/graphql")
-    @app.get("/graphql/")
-    async def redirect_to_latest_graphiql() -> RedirectResponse:
-        """Redirect unversioned GraphiQL so developers can pin to the newest version."""
-        return RedirectResponse(f"/graphql/v{latest_graphql_version}")
 
-    imported: set[int] = set()
-    version_regex = re.compile(r"/graphql/v(\d+)")
-
-    @app.middleware("http")
-    async def graphql_loader(request: Request, call_next: Any) -> Any:
-        graphql_match = version_regex.match(request.url.path)
-        if graphql_match is None:
-            return await call_next(request)
-
-        version_number = int(graphql_match.group(1))
-        if version_number in imported:
-            return await call_next(request)
-
-        # Non-existent GraphQL versions send 404
-        if version_number not in graphql_versions:
-            return JSONResponse(
-                status_code=status.HTTP_404_NOT_FOUND,
-                content={"message": "No such GraphQL version"},
-            )
-
-        logger.info(
-            "Importing GraphQL version", version=version_number, imported=imported
-        )
-        router = load_graphql_version(version_number)
-        app.include_router(prefix=f"/graphql/v{version_number}", router=router)
-        imported.add(version_number)
-
-        return await call_next(request)
+for version in Version:
+    router.include_router(
+        prefix=f"/graphql/v{version.value}", router=get_router(version)
+    )

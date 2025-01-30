@@ -26,7 +26,7 @@ from mora.graphapi.versions.latest.schema import AddressRead
 from mora.graphapi.versions.latest.version import LatestGraphQLSchema
 from strawberry.dataloader import DataLoader
 
-SCHEMA = str(LatestGraphQLSchema.get())
+SCHEMA = str(LatestGraphQLSchema)
 
 
 ORG_QUERY = "query { org { uuid } }"

@@ -219,21 +219,23 @@ async def set_graphql_context_dependencies(
 
 
 async def execute_graphql(*args: Any, **kwargs: Any) -> ExecutionResult:
-    # Imports must be done here to avoid circular imports... eww
-    from .versions.latest.version import LatestGraphQLVersion
-
-    graphql_version = LatestGraphQLVersion
+    # TODO: can these be non-local imports now?
+    from mora.graphapi.versioning import LATEST_VERSION
+    from mora.graphapi.versions.base import get_schema
 
     if "context_value" not in kwargs:
         # TODO: The token should be passed from the original caller, such that the
         #  service API shims get RBAC equivalent to the GraphQL API for free.
-        kwargs["context_value"] = await graphql_version.get_context(
+        from mora.graphapi.main import get_context_getter
+        context_getter = get_context_getter(LATEST_VERSION)
+        kwargs["context_value"] = await context_getter(
+            version=LATEST_VERSION,
             get_token=noauth,
             amqp_system=context.get("amqp_system"),
             session=context.get("session"),
         )
 
-    schema = graphql_version.schema.get()
+    schema = get_schema(LATEST_VERSION)
     return await schema.execute(*args, **kwargs)
 
 

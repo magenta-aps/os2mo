@@ -23,7 +23,7 @@ async def load_fixture_data(fixture_db):
     yield
 
 
-SCHEMA = str(LatestGraphQLSchema.get())
+SCHEMA = str(LatestGraphQLSchema)
 UUID_SEARCHABLE_FIELDS = [
     "addresses",
     "associations",

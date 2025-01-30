@@ -210,7 +210,7 @@ async def facet_resolver(
     ):
         kwargs["facettilhoerer"] = await _get_parent_uuids(info, filter)
 
-    if info.context["version"] <= 19:
+    if info.context["version"] <= 19:  # TODO!
         filter = BaseFilter(  # type: ignore[assignment]
             uuids=filter.uuids,
             user_keys=filter.user_keys,

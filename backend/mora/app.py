@@ -38,7 +38,7 @@ from mora.auth.keycloak.oidc import service_api_auth
 from mora.auth.keycloak.router import keycloak_router
 from mora.auth.middleware import set_authenticated_user
 from mora.common import lora_connector_context
-from mora.graphapi.main import setup_graphql
+from mora.graphapi.main import router as graphapi_router
 from mora.graphapi.middleware import is_graphql_context
 from mora.request_scoped.query_args_context_plugin import query_args_context
 from mora.service.address_handler.dar import dar_loader_context
@@ -273,7 +273,10 @@ def create_app(settings_overrides: dict[str, Any] | None = None):
             tags=["Service." + name],
         )
 
-    setup_graphql(app=app)
+    app.include_router(
+        graphapi_router,
+        tags=["GraphQL"],
+    )
 
     if settings.os2mo_auth:
         app.include_router(

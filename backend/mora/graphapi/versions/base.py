@@ -2,26 +2,23 @@
 # SPDX-License-Identifier: MPL-2.0
 import traceback
 from collections.abc import AsyncIterator
-from collections.abc import Iterable
-from collections.abc import Sequence
 from contextlib import suppress
 from functools import cache
-from textwrap import dedent
 from typing import Any
+from typing import cast
 
-from fastapi import APIRouter
+import strawberry
 from fastapi.encoders import jsonable_encoder
 from graphql import ExecutionResult
 from graphql.error import GraphQLError
-from starlette.responses import PlainTextResponse
+from pydantic import PositiveInt
 from strawberry import Schema
 from strawberry.exceptions import StrawberryGraphQLError
 from strawberry.extensions import SchemaExtension
-from strawberry.printer import print_schema
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types import ExecutionContext
-from strawberry.types.scalar import ScalarDefinition
-from strawberry.types.scalar import ScalarWrapper
+from strawberry.types.base import StrawberryObjectDefinition
+from strawberry.types.field import StrawberryField
 from strawberry.utils.await_maybe import AsyncIteratorOrIterator
 from structlog import get_logger
 
@@ -29,8 +26,16 @@ from mora import config
 from mora.db import get_session
 from mora.exceptions import HTTPException
 from mora.graphapi.middleware import StarletteContextExtension
-from mora.graphapi.router import CustomGraphQLRouter
+from mora.graphapi.versioning import Metadata
+from mora.graphapi.versioning import Version
+from mora.graphapi.versions.latest.mutators import Mutation
+from mora.graphapi.versions.latest.query import Query
+from mora.graphapi.versions.latest.schema import DARAddress
+from mora.graphapi.versions.latest.schema import DefaultAddress
+from mora.graphapi.versions.latest.schema import MultifieldAddress
+from mora.graphapi.versions.latest.types import CPRType
 from mora.log import canonical_gql_context
+from mora.util import CPR
 
 logger = get_logger()
 
@@ -109,6 +114,26 @@ class IntrospectionQueryCacheExtension(SchemaExtension):
 
 
 class CustomSchema(Schema):
+    def __init__(self, version: Version, *args: Any, **kwargs: Any) -> None:
+        self.version = version
+        super().__init__(*args, **kwargs)
+
+    def get_fields(
+        self, type_definition: StrawberryObjectDefinition
+    ) -> list[StrawberryField]:
+        """Filter fields based on GraphQL version.
+
+        https://strawberry.rocks/docs/types/schema
+        """
+
+        def is_in_version(field: StrawberryField) -> bool:
+            metadata = cast(Metadata, field.metadata)
+            if "version" not in metadata:
+                return True
+            return metadata["version"](self.version)
+
+        return [field for field in type_definition.fields if is_in_version(field)]
+
     def process_errors(
         self,
         errors: list[GraphQLError],
@@ -125,92 +150,35 @@ class CustomSchema(Schema):
                 print(exception, end="")
 
 
-class BaseGraphQLSchema:
-    """Base GraphQL Schema wrapper with MO defaults.
-
-    Type definitions are mostly copied from Strawberry. We cannot simply inherit from
-    the Strawberry class, as its configuration is passed at init-time, whereas this
-    wrapper allows for import-time definitions.
-    """
-
-    query: type
-    mutation: type
-
-    types: Iterable = ()
-
-    extensions: Sequence[type[SchemaExtension] | SchemaExtension] = [
-        StarletteContextExtension,
-        LogContextExtension,
-        RollbackOnError,
-        ExtendedErrorFormatExtension,
-        IntrospectionQueryCacheExtension,
-    ]
-
-    # Automatic camelCasing disabled because under_score style is simply better
-    #
-    # See: An Eye Tracking Study on camelCase and under_score Identifier Styles
-    # Excerpt:
-    #   Although, no difference was found between identifier styles with respect
-    #   to accuracy, results indicate a significant improvement in time and lower
-    #   visual effort with the underscore style.
-    #
-    # Additionally, it preserves the naming of the underlying Python functions.
-    config: StrawberryConfig | None = StrawberryConfig(auto_camel_case=False)
-
-    scalar_overrides: dict[object, ScalarWrapper | ScalarDefinition | type] | None = (
-        None
+@cache
+def get_schema(version: Version) -> CustomSchema:
+    """Instantiate Strawberry Schema."""
+    return CustomSchema(
+        version=version,
+        query=Query,
+        mutation=Mutation,
+        types=[DefaultAddress, DARAddress, MultifieldAddress],
+        extensions=[
+            StarletteContextExtension,
+            LogContextExtension,
+            RollbackOnError,
+            ExtendedErrorFormatExtension,
+            IntrospectionQueryCacheExtension,
+        ],
+        config=StrawberryConfig(
+            # Automatic camelCasing disabled because under_score style is simply better
+            #
+            # See: An Eye Tracking Study on camelCase and under_score Identifier Styles
+            # Excerpt:
+            #   Although, no difference was found between identifier styles with respect
+            #   to accuracy, results indicate a significant improvement in time and lower
+            #   visual effort with the underscore style.
+            #
+            # Additionally, it preserves the naming of the underlying Python functions.
+            auto_camel_case=False,
+        ),
+        scalar_overrides={
+            CPR: CPRType,
+            PositiveInt: strawberry.scalar(int),
+        },
     )
-
-    @classmethod
-    @cache
-    def get(cls) -> CustomSchema:
-        """Instantiate Strawberry Schema."""
-        return CustomSchema(
-            query=cls.query,
-            mutation=cls.mutation,
-            types=cls.types,
-            extensions=cls.extensions,
-            config=cls.config,
-            scalar_overrides=cls.scalar_overrides,
-        )
-
-
-class BaseGraphQLVersion:
-    """Base container for a versioned GraphQL API."""
-
-    version: int
-    schema: type[BaseGraphQLSchema]
-
-    @classmethod
-    async def get_context(cls) -> dict[str, Any]:
-        """Strawberry context getter."""
-        return {
-            "version": cls.version,
-        }
-
-    @classmethod
-    def get_router(cls, is_latest: bool) -> APIRouter:
-        """Get Strawberry FastAPI router serving this GraphQL API version."""
-        router = CustomGraphQLRouter(
-            graphql_ide="graphiql",  # TODO: pathfinder seems a lot nicer
-            is_latest=is_latest,
-            schema=cls.schema.get(),
-            context_getter=cls.get_context,
-        )
-
-        @router.get("/schema.graphql", response_class=PlainTextResponse)
-        async def schema() -> str:
-            """Return the GraphQL version's schema definition in SDL format."""
-            header = dedent(
-                f"""\
-                # SPDX-FileCopyrightText: Magenta ApS <https://magenta.dk>
-                # SPDX-License-Identifier: MPL-2.0
-                #
-                # OS2mo GraphQL API schema definition (v{cls.version}).
-                # https://os2mo.eksempel.dk/graphql/v{cls.version}/schema.graphql
-
-                """
-            )
-            return header + print_schema(cls.schema.get())
-
-        return router

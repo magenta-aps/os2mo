@@ -4,8 +4,10 @@ from datetime import date
 from datetime import datetime
 from itertools import starmap
 from textwrap import dedent
-from typing import Any
-from typing import TypeVar
+from typing import (
+    Any,
+    TypeVar,
+)
 from uuid import UUID
 
 import strawberry
@@ -28,11 +30,11 @@ from mora.db import OrganisationEnhedRegistrering
 from mora.db import OrganisationFunktionAttrEgenskaber
 from mora.db import OrganisationFunktionRegistrering
 from mora.util import parsedatetime
-
 from .filters import RegistrationFilter
 from .paged import CursorType
 from .paged import LimitType
 from .resolvers import get_sqlalchemy_date_interval
+from ...versioning import Metadata, Version
 
 MOObject = TypeVar("MOObject")
 
@@ -54,7 +56,11 @@ MOObject = TypeVar("MOObject")
     )
 )
 class Registration:
-    registration_id: int = strawberry.field(
+    registration_id: strawberry.Private[int]
+
+    registration_id__v21: int = strawberry.field(
+        resolver=lambda root: root.registration_id,
+        name="registration_id",
         description=dedent(
             """\
         Internal registration ID for the registration.
@@ -65,6 +71,18 @@ class Registration:
             May be removed in the future once the bitemporal scheme is finished.
             """
         ),
+        metadata=Metadata(version=lambda v: v <= Version.VERSION_21),
+    )
+
+    registration_id__v22: int = strawberry.field(
+        resolver=lambda root: root.registration_id,
+        name="registration_id",
+        description=dedent(
+            """\
+        Internal registration ID for the registration.
+        """
+        ),
+        metadata=Metadata(version=lambda v: v >= Version.VERSION_22),
     )
 
     start: datetime = strawberry.field(

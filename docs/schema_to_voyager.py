@@ -31,7 +31,7 @@ def main() -> None:
     settings = Settings()
 
     # Get introspection from loaded schema
-    schema: GraphQLSchema = gql_util.build_schema(LatestGraphQLSchema.get().as_str())
+    schema: GraphQLSchema = gql_util.build_schema(LatestGraphQLSchema.as_str())
     introspect: dict[str, Any] = gql_util.introspection_from_schema(schema)
 
     # Apply to template & write out
