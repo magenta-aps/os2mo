@@ -65,6 +65,7 @@ from mora.util import now
 from ...version import Version as GraphQLVersion
 from .filters import ITUserFilter
 from .filters import ManagerFilter
+from .filters import OrganisationUnitFilter
 from .filters import OwnerFilter
 from .graphql_utils import LoadKey
 from .health import health_map
@@ -3589,6 +3590,25 @@ class OrganisationUnit:
         description=dedent(
             """\
             The parent organisation unit in the organisation tree.
+            """
+        ),
+        permission_classes=[IsAuthenticatedPermission, gen_read_permission("org_unit")],
+    )
+    root: LazyOrganisationUnit | None = strawberry.field(
+        resolver=to_only(
+            seed_resolver(
+                organisation_unit_resolver,
+                {
+                    "descendant": lambda root: OrganisationUnitFilter(
+                        uuids=[root.uuid]
+                    ),
+                    "parent": lambda root: None,
+                },
+            )
+        ),
+        description=dedent(
+            """\
+            The top-unit (root) of the organisation unit, in the hierarchy.
             """
         ),
         permission_classes=[IsAuthenticatedPermission, gen_read_permission("org_unit")],
