@@ -316,9 +316,12 @@ class SearchQueryBuilder:
         join_table = JoinTable(name=table_name, alias=table_alias)
         if join_table not in self.__inner_join_tables:
             self.__inner_join_tables.append(join_table)
-        id_var_name = "rel_maal_uuid" if relation.id_is_uuid else "rel_maal_urn"
-        base_condition = f"""{join_table.ref}.rel_type = '{relation.type}'
-         AND {join_table.ref}.{id_var_name} = '{relation.id}'"""
+        # HACK: todo
+        if relation.id == "urn:LORA-PLEASE-FIND-NULL-UUID-AND-URN":
+            base_condition = f"""{join_table.ref}.rel_type = '{relation.type}' AND {join_table.ref}.rel_maal_uuid is null AND {join_table.ref}.rel_maal_urn is null"""
+        else:
+            id_var_name = "rel_maal_uuid" if relation.id_is_uuid else "rel_maal_urn"
+            base_condition = f"""{join_table.ref}.rel_type = '{relation.type}' AND {join_table.ref}.{id_var_name} = '{id}'"""
 
         if relation.object_type is not None:
             obj_condition = f"{join_table.ref}.objekt_type = '{relation.object_type}'"

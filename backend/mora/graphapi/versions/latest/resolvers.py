@@ -559,7 +559,9 @@ async def manager_resolver(
     await registration_filter(info, filter)
 
     kwargs = {}
-    if filter.employee is not None or filter.employees is not None:
+    if filter.employee is None:
+        kwargs["tilknyttedebrugere"] = "urn:LORA-PLEASE-FIND-NULL-UUID-AND-URN"
+    elif filter.employee is not None or filter.employees is not None:
         kwargs["tilknyttedebrugere"] = lora_filter(
             await get_employee_uuids(info, filter)
         )
