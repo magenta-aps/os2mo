@@ -100,3 +100,5 @@ exclude_also = [
     # pragma comment to excludes an entire file
     '\A(?s:.*# pragma: no cover file.*)\Z',
 ]
+[tool.coverage.run]
+dynamic_context = "test_function"
