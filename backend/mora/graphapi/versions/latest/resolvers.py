@@ -274,9 +274,6 @@ async def class_resolver(
     await registration_filter(info, filter)
 
     kwargs: dict[str, Any] = {}
-    if filter.name is not None:
-        kwargs["titel"] = to_similar(filter.name)
-
     if (
         filter.facets is not None
         or filter.facet_user_keys is not None
