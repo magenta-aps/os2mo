@@ -25,7 +25,6 @@ from .paged import CursorType
 from .paged import LimitType
 from .permissions import IsAuthenticatedPermission
 from .permissions import gen_read_permission
-from .schema import uuid2list
 from .seed_resolver import seed_resolver
 
 
@@ -256,6 +255,13 @@ class Namespace:
             gen_read_permission("event_namespace"),
         ],
     )
+
+
+# WIP: there is a cyclical dependency we solve with this. Just making sure
+# we're building the right thing first.
+def uuid2list(uuid: UUID | None) -> list[UUID]:
+    from .schema import uuid2list as uuid2list2
+    return uuid2list2(uuid)
 
 
 @strawberry.type(description="Event listeners.")
