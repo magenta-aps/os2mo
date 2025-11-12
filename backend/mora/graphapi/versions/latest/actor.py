@@ -119,6 +119,11 @@ def get_actor_loaders(session: AsyncSession) -> dict[str, DataLoader]:
 class Actor:
     uuid: UUID = strawberry.field(description="UUID of the actor")
 
+    @strawberry.field
+    async def name(self, root: "Actor", info: Info) -> str:
+        loader: DataLoader = info.context[ACTOR_NAME_LOADER_KEY]
+        return await loader.load(root.uuid)
+
     event_namespaces: list[Namespace] = strawberry.field(
         resolver=seed_resolver(
             namespace_resolver, {"owners": lambda root: [root.uuid]}
