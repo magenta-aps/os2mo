@@ -69,17 +69,19 @@ async def set_authenticated_user(
     # https://redmine.magenta.dk/issues/67592
     try:
         token = await get_token()
-        uuid = token.uuid
-        name = token.preferred_username
-        if _should_save_actor(uuid, name, request, session):
-            await session.execute(
-                insert(Actor)
-                .values(actor=uuid, name=name)
-                .on_conflict_do_update(index_elements=["actor"], set_={"name": name})
-            )
     except Exception:
         uuid = UNABLE_TO_PARSE_TOKEN_UUID
         name = "Unable to parse token"
+    else:
+        uuid = token.uuid
+        name = token.preferred_username
+
+    if _should_save_actor(uuid, name, request, session):
+        await session.execute(
+            insert(Actor)
+            .values(actor=uuid, name=name)
+            .on_conflict_do_update(index_elements=["actor"], set_={"name": name})
+        )
     if uuid is None:
         uuid = MISSING_UUID_ON_TOKEN_UUID
         name = "UUID missing on token"
