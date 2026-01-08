@@ -25,8 +25,40 @@ from mora.graphapi.middleware import StarletteContextExtension
 from mora.graphapi.version import Version
 from mora.graphapi.versions.latest.actor import SpecialActor
 from mora.graphapi.versions.latest.actor import UnknownActor
+from mora.graphapi.versions.latest.collections import KLE
+from mora.graphapi.versions.latest.collections import Address
+from mora.graphapi.versions.latest.collections import Association
+from mora.graphapi.versions.latest.collections import Class
+from mora.graphapi.versions.latest.collections import Employee
+from mora.graphapi.versions.latest.collections import Engagement
+from mora.graphapi.versions.latest.collections import Facet
+from mora.graphapi.versions.latest.collections import ITSystem
+from mora.graphapi.versions.latest.collections import ITUser
+from mora.graphapi.versions.latest.collections import Leave
+from mora.graphapi.versions.latest.collections import Manager
+from mora.graphapi.versions.latest.collections import OrganisationUnit
+from mora.graphapi.versions.latest.collections import Owner
+from mora.graphapi.versions.latest.collections import RelatedUnit
+from mora.graphapi.versions.latest.collections import RoleBinding
 from mora.graphapi.versions.latest.mutators import Mutation
 from mora.graphapi.versions.latest.query import Query
+from mora.graphapi.versions.latest.registration_types import AddressRegistration
+from mora.graphapi.versions.latest.registration_types import AssociationRegistration
+from mora.graphapi.versions.latest.registration_types import ClassRegistration
+from mora.graphapi.versions.latest.registration_types import EngagementRegistration
+from mora.graphapi.versions.latest.registration_types import FacetRegistration
+from mora.graphapi.versions.latest.registration_types import ITSystemRegistration
+from mora.graphapi.versions.latest.registration_types import ITUserRegistration
+from mora.graphapi.versions.latest.registration_types import KLERegistration
+from mora.graphapi.versions.latest.registration_types import LeaveRegistration
+from mora.graphapi.versions.latest.registration_types import ManagerRegistration
+from mora.graphapi.versions.latest.registration_types import (
+    OrganisationUnitRegistration,
+)
+from mora.graphapi.versions.latest.registration_types import OwnerRegistration
+from mora.graphapi.versions.latest.registration_types import PersonRegistration
+from mora.graphapi.versions.latest.registration_types import RelatedUnitRegistration
+from mora.graphapi.versions.latest.registration_types import RoleBindingRegistration
 from mora.graphapi.versions.latest.schema import DARAddress
 from mora.graphapi.versions.latest.schema import DefaultAddress
 from mora.graphapi.versions.latest.schema import MultifieldAddress
@@ -131,6 +163,38 @@ def get_schema(version: Version) -> CustomSchema:
             MultifieldAddress,
             SpecialActor,
             UnknownActor,
+            # Concrete validity types
+            Address,
+            Association,
+            Class,
+            Employee,
+            Engagement,
+            Facet,
+            ITSystem,
+            ITUser,
+            KLE,
+            Leave,
+            Manager,
+            Owner,
+            OrganisationUnit,
+            RelatedUnit,
+            RoleBinding,
+            # Concrete registration types
+            AddressRegistration,
+            AssociationRegistration,
+            ClassRegistration,
+            PersonRegistration,
+            EngagementRegistration,
+            FacetRegistration,
+            ITSystemRegistration,
+            ITUserRegistration,
+            KLERegistration,
+            LeaveRegistration,
+            ManagerRegistration,
+            OwnerRegistration,
+            OrganisationUnitRegistration,
+            RelatedUnitRegistration,
+            RoleBindingRegistration,
         ],
         extensions=[
             StarletteContextExtension,
