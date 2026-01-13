@@ -683,3 +683,103 @@ async def test_it_user_external_id(graphapi_post: GraphAPIPost) -> None:
             "validity": {"from": "2022-02-02T00:00:00+01:00", "to": None},
         },
     ]
+
+
+@pytest.mark.integration_test
+@pytest.mark.usefixtures("fixture_db")
+async def test_it_user_validation(graphapi_post: GraphAPIPost) -> None:
+    ad_itsystem = "59c135c9-2b15-41cc-97c8-b5dff7180beb"
+    erik = "236e0a78-11a0-4ed9-8545-6286bb8611c7"
+    role_facet = "68ba77bc-4d57-43e2-9c24-0c9eda5fddc7"
+
+    class_create = graphapi_post(
+        """
+        mutation CreateRoleClass($input: ClassCreateInput!){
+            class_create(input: $input){
+                uuid
+            }
+        }
+        """,
+        variables={
+            "input": {
+                "name": "admin",
+                "user_key": "admin",
+                "facet_uuid": role_facet,
+                "it_system_uuid": ad_itsystem,
+                "validity": {
+                    "from": "2021-01-01T00:00:00+01:00",
+                },
+            }
+        },
+    )
+    assert class_create.errors is None
+    assert class_create.data is not None
+    role_uuid = class_create.data["class_create"]["uuid"]
+
+    ituser_create = graphapi_post(
+        """
+        mutation ItUser($input: ITUserCreateInput!){
+            ituser_create(input: $input){
+                uuid
+            }
+        }
+        """,
+        variables={
+            "input": {
+                "person": erik,
+                "itsystem": ad_itsystem,
+                "user_key": "account",
+                "validity": {
+                    "from": "2021-01-01T00:00:00+01:00",
+                },
+            }
+        },
+    )
+
+    assert ituser_create.errors is None
+    assert ituser_create.data is not None
+    ituser_uuid = ituser_create.data["ituser_create"]["uuid"]
+
+    rolebinding_create = graphapi_post(
+        """
+        mutation RolebindingCreate($input: RoleBindingCreateInput!){
+            rolebinding_create(input: $input){
+                uuid
+            }
+        }
+        """,
+        variables={
+            "input": {
+                "ituser": ituser_uuid,
+                "role": role_uuid,
+                "validity": {
+                    "from": "2021-01-01T00:00:00+01:00",
+                },
+            }
+        },
+    )
+
+    assert rolebinding_create.errors is None
+    assert rolebinding_create.data is not None
+
+    terminate_ituser = graphapi_post(
+        """
+        mutation TerminateItUser($input: ITUserTerminateInput!) {
+            ituser_terminate(input: $input) {
+                uuid
+            }
+        }
+        """,
+        variables={
+            "input": {
+                "uuid": ituser_uuid,
+                "to": "2021-01-02",
+            }
+        },
+    )
+    assert terminate_ituser.data is None
+    assert terminate_ituser.errors is not None
+    assert (
+        terminate_ituser.errors[0]["extensions"]["error_context"]["error_key"]
+        == "V_TERMINATE_ITUSER_WITH_ROLEBINDINGS"
+    )

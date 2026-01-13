@@ -49,10 +49,10 @@ async def update_ituser(input: ITUserUpdate) -> UUID:
 async def terminate_ituser_validation(
     ituser_terminate: ITUserTerminate,
 ) -> None:
-    # coverage: pause
     uuid_str = str(ituser_terminate.uuid)
 
     # Get & verify basic date
+    # coverage: pause
     if ituser_terminate.from_date and ituser_terminate.to_date:
         date = ituser_terminate.get_terminate_effect_from_date()
     else:
