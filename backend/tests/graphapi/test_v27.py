@@ -1,73 +1,170 @@
 # SPDX-FileCopyrightText: Magenta ApS <https://magenta.dk>
 # SPDX-License-Identifier: MPL-2.0
-
-from typing import Any
-
 import pytest
-from graphql import build_schema
-from graphql import introspection_from_schema
-from mora.graphapi.schema import get_schema
-from mora.graphapi.version import Version
-from more_itertools import one
+
+from tests.conftest import GraphAPIPost
 
 
-@pytest.mark.parametrize(
-    "version,expected",
-    (
-        (Version.VERSION_26, "Registration"),
-        (Version.VERSION_27, "FacetResponseRegistration"),
-    ),
-)
-def test_schema(version: Version, expected: str) -> None:
-    """Test that registrations on Response has the correct type."""
-    schema_sdl = get_schema(version).as_str()
-    schema = build_schema(schema_sdl)
-    introspection = introspection_from_schema(schema)
-    types = introspection["__schema"]["types"]
+@pytest.mark.integration_test
+@pytest.mark.usefixtures("fixture_db")
+async def test_kle_number(graphapi_post: GraphAPIPost) -> None:
+    """
+        BREAKING CHANGE:
 
-    def find_by_name(collection: list, name: str) -> Any:
-        return one(element for element in collection if element["name"] == name)
+    Query:
 
-    # Find the "Query" type in the GraphQL schema
-    query = find_by_name(types, "Query")
-    query_fields = query["fields"]
-    # Find "facets" within its fields and assert its type
-    facets = find_by_name(query_fields, "facets")
-    facets_type = facets["type"]["ofType"]
-    assert facets_type == {
-        "kind": "OBJECT",
-        "name": "FacetResponsePaged",
-        "ofType": None,
+    ```graphql
+    query MyQuery {
+      org {
+        uuid
+      }
+      org_units(filter: {parent: null}, limit: 1) {
+        objects {
+          current {
+            parent_uuid
+            parent {
+              uuid
+            }
+            parent_response {
+              uuid
+            }
+          }
+        }
+      }
     }
+    ```
 
-    # Find the "FacetResponsePaged" type in the GraphQL schema
-    facets = find_by_name(types, "FacetResponsePaged")
-    facets_fields = facets["fields"]
-    # Find "objects" within its fields
-    objects = find_by_name(facets_fields, "objects")
-    objects_type = objects["type"]["ofType"]
-    assert objects_type == {
-        "kind": "LIST",
-        "name": None,
-        "ofType": {
-            "kind": "NON_NULL",
-            "name": None,
-            "ofType": {"kind": "OBJECT", "name": "FacetResponse", "ofType": None},
+    v25:
+
+    ```json
+    {
+      "data": {
+        "org": {
+          "uuid": "67e9a80e-6bc0-e97a-9751-02600c017844"
         },
+        "org_units": {
+          "objects": [
+            {
+              "current": {
+                "parent_uuid": "67e9a80e-6bc0-e97a-9751-02600c017844",
+                "parent": null,
+                "parent_response": {
+                  "uuid": "67e9a80e-6bc0-e97a-9751-02600c017844"
+                }
+              }
+            }
+          ]
+        }
+      }
     }
+    ```
 
-    # Find the "FacetResponse" type in the GraphQL schema
-    objects = find_by_name(types, "FacetResponse")
-    objects_fields = objects["fields"]
-    # Find "registrations" within its fields
-    registrations = find_by_name(objects_fields, "registrations")
-    registrations_type = registrations["type"]["ofType"]
-    assert registrations_type == {
-        "kind": "LIST",
-        "name": None,
-        "ofType": {
-            "kind": "NON_NULL",
-            "name": None,
-            "ofType": {"kind": "OBJECT", "name": expected, "ofType": None},
+    v26:
+
+    ```json
+    {
+      "data": {
+        "org": {
+          "uuid": "67e9a80e-6bc0-e97a-9751-02600c017844"
         },
+        "org_units": {
+          "objects": [
+            {
+              "current": {
+                "parent_uuid": null,
+                "parent": null,
+                "parent_response": null
+              }
+            }
+          ]
+        }
+      }
     }
+    ```
+    """
+    """Test kle_number field."""
+    # Create KLE number class
+    kle_number = graphapi_post(
+        """
+        mutation CreateKleNumber {
+          class_create(
+            input: {
+              facet_uuid: "27935dbb-c173-4116-a4b5-75022315749d",
+              name: "number",
+              user_key: "number",
+              validity: { from: "2010-01-01", to: "2020-01-01" },
+            }
+          ) {
+            uuid
+          }
+        }
+        """
+    )
+    assert kle_number.errors is None
+    assert kle_number.data is not None
+    kle_number_uuid = kle_number.data["class_create"]["uuid"]
+
+    # Create KLE
+    kle = graphapi_post(
+        """
+        mutation CreateKle($number: UUID!) {
+          kle_create(
+            input: {
+              org_unit: "9d07123e-47ac-4a9a-88c8-da82e3a4bc9e",
+              kle_aspects: ["9016d80a-c6d2-4fb4-83f1-87ecc23ab062"],
+              kle_number: $number,
+              validity: { from: "2025-01-01" },
+            }
+          ) {
+            uuid
+          }
+        }
+        """,
+        variables={"number": kle_number_uuid},
+    )
+    assert kle.errors is None
+    assert kle.data is not None
+    kle_uuid = kle.data["kle_create"]["uuid"]
+
+    # Read KLE
+    query = """
+        query ReadKLE($filter: KLEFilter!) {
+          kles(filter: $filter) {
+            objects {
+              current {
+                kle_number {
+                  name
+                }
+              }
+            }
+          }
+        }
+    """
+
+    # GraphQL v22 incorrectly assumed that KLE-number classes were static;
+    # valid from -infinity to infinity and never changing. Attempting to read a
+    # with a kle_number in the past or future would therefore lead to an error,
+    # since the promise of always returning a single KLE class could not be
+    # fulfilled.
+    response_v23 = graphapi_post(
+        query,
+        variables={"filter": {"uuids": kle_uuid}},
+        url="/graphql/v22",
+    )
+    assert response_v23.errors == [
+        {
+            "message": "too few items in iterable (expected 1)",
+            "locations": [{"line": 6, "column": 17}],
+            "path": ["kles", "objects", 0, "current", "kle_number"],
+        }
+    ]
+
+    # GraphQL v23 returns a -- potentially empty -- list of classes valid in
+    # the given time period.
+    response_v23 = graphapi_post(
+        query,
+        variables={"filter": {"uuids": kle_uuid}},
+        url="/graphql/v23",
+    )
+    assert response_v23.errors is None
+    assert response_v23.data == {"kles": {"objects": [{"current": {"kle_number": []}}]}}

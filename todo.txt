@@ -1,0 +1,25 @@
+query MyQuery {
+  org {
+    uuid
+  }
+  org_units(filter: {parent: null}, limit: 1) {
+    objects {
+      current {
+        parent_uuid
+        parent {
+          uuid
+        }
+        parent_response {
+          uuid
+        }
+        root {
+          uuid
+        }
+        root_response {
+          uuid
+        }
+      }
+    }
+  }
+}
+
