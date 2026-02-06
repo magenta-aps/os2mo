@@ -1143,7 +1143,7 @@ class ManagerCreate(UUIDBase):
             "user_key": self.user_key,
             "type": "manager",
             "person": gen_uuid(self.person),
-            "engagement": gen_uuid(self.engagement) if self.engagement else None,
+            "engagement": gen_uuid(self.engagement),
             "responsibility": responsibilities,
             "org_unit": gen_uuid(self.org_unit),
             "manager_level": gen_uuid(self.manager_level),
