@@ -190,7 +190,7 @@ async def test_person_read_registration_time_on_current(
 
     # Q2: Search for ID existence at 3050
     assert normalize_sql(q2).startswith(
-        f"SELECT bruger_registrering.bruger_id as id FROM bruger_registrering WHERE (bruger_registrering.registrering).livscykluskode != 'Slettet'::livscykluskode AND bruger_registrering.bruger_id = '{person_uuid}'"
+        f"SELECT DISTINCT bruger_registrering.bruger_id as id FROM bruger_registrering WHERE (bruger_registrering.registrering).livscykluskode != 'Slettet'::livscykluskode AND bruger_registrering.bruger_id = '{person_uuid}'"
     )
     assert (
         "tstzrange('3050-01-01T00:00:00+00:00'::timestamptz, '3050-01-01T00:00:00.000001+00:00'::timestamptz)"
@@ -240,7 +240,7 @@ async def test_person_read_registration_time_on_filter(
 
     # Search for ID at registration_time
     assert normalize_sql(q1).startswith(
-        f"SELECT bruger_registrering.bruger_id as id FROM bruger_registrering WHERE (bruger_registrering.registrering).livscykluskode != 'Slettet'::livscykluskode AND bruger_registrering.bruger_id = '{person_uuid}'"
+        f"SELECT DISTINCT bruger_registrering.bruger_id as id FROM bruger_registrering WHERE (bruger_registrering.registrering).livscykluskode != 'Slettet'::livscykluskode AND bruger_registrering.bruger_id = '{person_uuid}'"
     )
     assert (
         "tstzrange('3050-01-01T00:00:00+00:00'::timestamptz, '3050-01-01T00:00:00.000001+00:00'::timestamptz)"
@@ -289,7 +289,7 @@ async def test_person_read_registration_time_on_both(
 
     # Top-level search
     assert normalize_sql(q1).startswith(
-        f"SELECT bruger_registrering.bruger_id as id FROM bruger_registrering WHERE (bruger_registrering.registrering).livscykluskode != 'Slettet'::livscykluskode AND bruger_registrering.bruger_id = '{person_uuid}'"
+        f"SELECT DISTINCT bruger_registrering.bruger_id as id FROM bruger_registrering WHERE (bruger_registrering.registrering).livscykluskode != 'Slettet'::livscykluskode AND bruger_registrering.bruger_id = '{person_uuid}'"
     )
     assert (
         "tstzrange('3050-01-01T00:00:00+00:00'::timestamptz, '3050-01-01T00:00:00.000001+00:00'::timestamptz)"
@@ -307,7 +307,7 @@ async def test_person_read_registration_time_on_both(
 
     # Nested 'current' search
     assert normalize_sql(q3).startswith(
-        f"SELECT bruger_registrering.bruger_id as id FROM bruger_registrering WHERE (bruger_registrering.registrering).livscykluskode != 'Slettet'::livscykluskode AND bruger_registrering.bruger_id = '{person_uuid}'"
+        f"SELECT DISTINCT bruger_registrering.bruger_id as id FROM bruger_registrering WHERE (bruger_registrering.registrering).livscykluskode != 'Slettet'::livscykluskode AND bruger_registrering.bruger_id = '{person_uuid}'"
     )
 
     # Nested 'current' lookup at 3050 uses hex UUIDs and double casting.
