@@ -40,6 +40,9 @@ from mora import util
 from mora.access_log import access_log
 from mora.db import AsyncSession
 from mora.db import HasValidity
+from mora.db import ITSystemAttrEgenskaber
+from mora.db import ITSystemRegistrering
+from mora.db import ITSystemTilsGyldighed
 from mora.db import OrganisationEnhedAttrEgenskaber
 from mora.db import OrganisationEnhedRegistrering
 from mora.db import OrganisationEnhedRelation
@@ -885,7 +888,11 @@ def _get_registration_time(
 
 
 def _get_registrering_clause(
-    cls: type[OrganisationEnhedRegistrering | OrganisationFunktionRegistrering],
+    cls: type[
+        ITSystemRegistrering
+        | OrganisationEnhedRegistrering
+        | OrganisationFunktionRegistrering
+    ],
     time: datetime | SQLNOW,
 ) -> ColumnElement:
     return and_(
@@ -904,10 +911,14 @@ def _get_virkning_clause(
 
 def _get_gyldighed_clause(
     registrering_cls: type[
-        OrganisationEnhedRegistrering | OrganisationFunktionRegistrering
+        ITSystemRegistrering
+        | OrganisationEnhedRegistrering
+        | OrganisationFunktionRegistrering
     ],
     gyldighed_cls: type[
-        OrganisationEnhedTilsGyldighed | OrganisationFunktionTilsGyldighed
+        ITSystemTilsGyldighed
+        | OrganisationEnhedTilsGyldighed
+        | OrganisationFunktionTilsGyldighed
     ],
     filter: BaseFilter,
 ) -> ColumnElement:
@@ -1354,7 +1365,7 @@ async def organisation_unit_child_count(
 
 async def it_system_resolver_query(
     info: MOInfo,
-    filter: EngagementFilter,
+    filter: ITSystemFilter,
     limit: LimitType = None,
     cursor: CursorType = None,
 ) -> Select:
@@ -1362,126 +1373,37 @@ async def it_system_resolver_query(
 
     await registration_filter(info, filter)
 
-    def _funktionsnavn() -> ColumnElement:
-        return OrganisationFunktionRegistrering.id.in_(
-            select(
-                OrganisationFunktionAttrEgenskaber.organisationfunktion_registrering_id
-            ).where(
-                OrganisationFunktionAttrEgenskaber.funktionsnavn == "Engagement",
-                _get_virkning_clause(OrganisationFunktionAttrEgenskaber, filter),
-            )
-        )
-
     query = (
         select(
-            distinct(OrganisationFunktionRegistrering.organisationfunktion_id),
+            distinct(ITSystemRegistrering.itsystem_id),
         )
         .where(
             _get_registrering_clause(
-                OrganisationFunktionRegistrering,
+                ITSystemRegistrering,
                 _get_registration_time(filter, cursor),
             ),
             _get_gyldighed_clause(
-                OrganisationFunktionRegistrering,
-                OrganisationFunktionTilsGyldighed,
+                ITSystemRegistrering,
+                ITSystemTilsGyldighed,
                 filter,
             ),
-            _funktionsnavn(),
         )
         .order_by(
-            OrganisationFunktionRegistrering.organisationfunktion_id,
+            ITSystemRegistrering.itsystem_id,
         )
     )
 
     # UUIDs
     if filter.uuids is not None:
-        query = query.where(
-            OrganisationFunktionRegistrering.organisationfunktion_id.in_(filter.uuids)
-        )
+        query = query.where(ITSystemRegistrering.itsystem_id.in_(filter.uuids))
 
     # User keys
     if filter.user_keys is not None:
         query = query.where(
-            OrganisationFunktionRegistrering.id.in_(
-                select(
-                    OrganisationFunktionAttrEgenskaber.organisationfunktion_registrering_id
-                ).where(
-                    OrganisationFunktionAttrEgenskaber.brugervendtnoegle.in_(
-                        filter.user_keys
-                    ),
-                    _get_virkning_clause(OrganisationFunktionAttrEgenskaber, filter),
-                )
-            )
-        )
-
-    # Employees
-    if (
-        filter.employee is not None and filter.employee is not UNSET
-    ) or filter.employees is not None:
-        employee_uuids = await get_employee_uuids(info, filter)
-        query = query.where(
-            OrganisationFunktionRegistrering.id.in_(
-                select(
-                    OrganisationFunktionRelation.organisationfunktion_registrering_id
-                ).where(
-                    OrganisationFunktionRelation.rel_type
-                    == OrganisationFunktionRelationKode.tilknyttedebrugere,
-                    OrganisationFunktionRelation.rel_maal_uuid.in_(employee_uuids),
-                    _get_virkning_clause(OrganisationFunktionRelation, filter),
-                )
-            )
-        )
-
-    # Org units
-    if filter.org_units is not None or filter.org_unit is not None:
-        org_unit_uuids = await get_org_unit_uuids(info, filter)
-        query = query.where(
-            OrganisationFunktionRegistrering.id.in_(
-                select(
-                    OrganisationFunktionRelation.organisationfunktion_registrering_id
-                ).where(
-                    OrganisationFunktionRelation.rel_type
-                    == OrganisationFunktionRelationKode.tilknyttedeenheder,
-                    OrganisationFunktionRelation.rel_maal_uuid.in_(org_unit_uuids),
-                    _get_virkning_clause(OrganisationFunktionRelation, filter),
-                )
-            )
-        )
-
-    # Job function
-    if filter.job_function is not None:
-        job_function_uuids = await filter2uuids_func(
-            class_resolver, info, filter.job_function
-        )
-        query = query.where(
-            OrganisationFunktionRegistrering.id.in_(
-                select(
-                    OrganisationFunktionRelation.organisationfunktion_registrering_id
-                ).where(
-                    OrganisationFunktionRelation.rel_type
-                    == OrganisationFunktionRelationKode.opgaver,
-                    OrganisationFunktionRelation.rel_maal_uuid.in_(job_function_uuids),
-                    _get_virkning_clause(OrganisationFunktionRelation, filter),
-                )
-            )
-        )
-
-    # Engagement type
-    if filter.engagement_type is not None:
-        engagement_type_uuids = await filter2uuids_func(
-            class_resolver, info, filter.engagement_type
-        )
-        query = query.where(
-            OrganisationFunktionRegistrering.id.in_(
-                select(
-                    OrganisationFunktionRelation.organisationfunktion_registrering_id
-                ).where(
-                    OrganisationFunktionRelation.rel_type
-                    == OrganisationFunktionRelationKode.organisatoriskfunktionstype,
-                    OrganisationFunktionRelation.rel_maal_uuid.in_(
-                        engagement_type_uuids
-                    ),
-                    _get_virkning_clause(OrganisationFunktionRelation, filter),
+            ITSystemRegistrering.id.in_(
+                select(ITSystemAttrEgenskaber.itsystem_registrering_id).where(
+                    ITSystemAttrEgenskaber.brugervendtnoegle.in_(filter.user_keys),
+                    _get_virkning_clause(ITSystemAttrEgenskaber, filter),
                 )
             )
         )
@@ -1498,15 +1420,15 @@ async def it_system_resolver_query(
 
 async def it_system_resolver(
     info: MOInfo,
-    filter: EngagementFilter | None = None,
+    filter: ITSystemFilter | None = None,
     limit: LimitType = None,
     cursor: CursorType = None,
 ) -> Any:
-    """Resolve engagements."""
+    """Resolve IT systems."""
     if filter is None:
-        filter = EngagementFilter()
+        filter = ITSystemFilter()
 
-    query = await engagement_resolver_query(
+    query = await it_system_resolver_query(
         info=info,
         filter=filter,
         limit=limit,
@@ -1527,8 +1449,8 @@ async def it_system_resolver(
 
     access_log(
         session,
-        "filter_engagements",
-        "OrganisationFunktion",
+        "filter_itsystems",
+        "ITSystem",
         {
             "filter": filter,
             "limit": limit,
@@ -1538,8 +1460,8 @@ async def it_system_resolver(
     )
 
     return await generic_resolver(
-        info.context.dataloaders.engagement_getter,
-        info.context.dataloaders.engagement_loader,
+        info.context.dataloaders.itsystem_getter,
+        info.context.dataloaders.itsystem_loader,
         info=info,
         filter=BaseFilter(
             uuids=uuids,
