@@ -48,6 +48,7 @@ from mora.db import HasValidity
 from mora.db import KlasseAttrEgenskaber
 from mora.db import KlasseRegistrering
 from mora.db import KlasseRelation
+from mora.db import KlasseRelationKode
 from mora.db import KlasseTilsPubliceret
 from mora.db import OrganisationEnhedAttrEgenskaber
 from mora.db import OrganisationEnhedRegistrering
@@ -437,7 +438,7 @@ async def class_resolver_query(
         query = query.where(
             KlasseRegistrering.id.in_(
                 select(KlasseRelation.klasse_registrering_id).where(
-                    KlasseRelation.rel_type == "facet",
+                    KlasseRelation.rel_type == KlasseRelationKode.facet,
                     KlasseRelation.rel_maal_uuid.in_(facet_uuids),
                     _get_virkning_clause(KlasseRelation, filter),
                 )
@@ -454,7 +455,7 @@ async def class_resolver_query(
         query = query.where(
             KlasseRegistrering.id.in_(
                 select(KlasseRelation.klasse_registrering_id).where(
-                    KlasseRelation.rel_type == "overordnetklasse",
+                    KlasseRelation.rel_type == KlasseRelationKode.overordnetklasse,
                     KlasseRelation.rel_maal_uuid.in_(parent_uuids),
                     _get_virkning_clause(KlasseRelation, filter),
                 )
@@ -469,7 +470,7 @@ async def class_resolver_query(
         query = query.where(
             KlasseRegistrering.id.in_(
                 select(KlasseRelation.klasse_registrering_id).where(
-                    KlasseRelation.rel_type == "mapninger",
+                    KlasseRelation.rel_type == KlasseRelationKode.mapninger,
                     KlasseRelation.rel_maal_uuid.in_(it_system_uuids),
                     _get_virkning_clause(KlasseRelation, filter),
                 )
@@ -481,7 +482,7 @@ async def class_resolver_query(
         org_units = await _resolve_org_unit_filter(info, filter.owner)
         owner_clause = KlasseRegistrering.id.in_(
             select(KlasseRelation.klasse_registrering_id).where(
-                KlasseRelation.rel_type == "ejer",
+                KlasseRelation.rel_type == KlasseRelationKode.ejer,
                 KlasseRelation.rel_maal_uuid.in_(org_units),
                 _get_virkning_clause(KlasseRelation, filter),
             )
@@ -491,7 +492,7 @@ async def class_resolver_query(
                 owner_clause,
                 KlasseRegistrering.id.not_in(
                     select(KlasseRelation.klasse_registrering_id).where(
-                        KlasseRelation.rel_type == "ejer",
+                        KlasseRelation.rel_type == KlasseRelationKode.ejer,
                         _get_virkning_clause(KlasseRelation, filter),
                     )
                 ),
