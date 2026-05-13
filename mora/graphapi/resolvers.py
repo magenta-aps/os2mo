@@ -42,6 +42,7 @@ from mora.db import AsyncSession
 from mora.db import FacetAttrEgenskaber
 from mora.db import FacetRegistrering
 from mora.db import FacetRelation
+from mora.db import FacetRelationKode
 from mora.db import FacetTilsPubliceret
 from mora.db import HasValidity
 from mora.db import OrganisationEnhedAttrEgenskaber
@@ -261,7 +262,7 @@ async def facet_resolver_query(
         query = query.where(
             FacetRegistrering.id.in_(
                 select(FacetRelation.facet_registrering_id).where(
-                    FacetRelation.rel_type == "facettilhoerer",
+                    FacetRelation.rel_type == FacetRelationKode.facettilhoerer,
                     FacetRelation.rel_maal_uuid.in_(parent_uuids),
                     _get_virkning_clause(FacetRelation, filter),
                 )
