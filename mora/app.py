@@ -311,6 +311,7 @@ def create_app(settings_overrides: dict[str, Any] | None = None):
             tags=["Testing"],
         )
 
+    # MARK: can delete
     if settings.expose_lora:
         app.include_router(create_lora_router(), prefix="/lora")
 

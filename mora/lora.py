@@ -379,6 +379,7 @@ class ParameterValuesExtractor:
         return suffix
 
 
+# MARK: cannot delete (transitively through .Scope)
 class BaseScope:
     def __init__(self, connector, path):
         self.connector = connector
@@ -403,6 +404,7 @@ class BaseScope:
                 self.lora_class = organisation.OrganisationFunktion
 
 
+# MARK cannot delete (referenced outside LoRa)
 class Scope(BaseScope):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

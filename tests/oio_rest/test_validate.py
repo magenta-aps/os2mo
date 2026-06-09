@@ -1185,8 +1185,10 @@ class TestSchemaEndPoints(util.DBTestCase):
             assert r.status_code == 200
             json.loads(r.text)
 
+    # MARK: can delete
     def test_klassifikation_hierarchy(self):
         self.assertSchemaOK(klassifikation.KlassifikationsHierarki)
 
+    # MARK: can delete
     def test_organisation_hierarchy(self):
         self.assertSchemaOK(organisation.OrganisationsHierarki)

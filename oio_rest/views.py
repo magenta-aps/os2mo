@@ -21,13 +21,16 @@ jinja_env = Environment(
 )
 
 
+# MARK: can delete
 def create_lora_router():
     router = APIRouter()
 
+    # MARK: can delete
     @router.get("/", tags=["Meta"])
     async def root():  # pragma: no cover
         return RedirectResponse(router.url_path_for("sitemap"))
 
+    # MARK: can delete (Casper says "nuke it")
     @router.get("/site-map", tags=["Meta"])
     async def sitemap():  # pragma: no cover
         """Returns a site map over all valid urls.
@@ -40,11 +43,13 @@ def create_lora_router():
         links = map(attrgetter("path"), links)
         return {"site-map": sorted(links)}
 
+    # MARK: can delete
     router.include_router(
         klassifikation.KlassifikationsHierarki.setup_api(),
         tags=["Klassifikation"],
     )
 
+    # MARK: can delete
     router.include_router(
         organisation.OrganisationsHierarki.setup_api(),
         tags=["Organisation"],
