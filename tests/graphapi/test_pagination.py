@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: Magenta ApS <https://magenta.dk>
 # SPDX-License-Identifier: MPL-2.0
+from collections.abc import Callable
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -14,95 +16,87 @@ serialize_cursor = Cursor._scalar_definition.serialize
 @pytest.mark.integration_test
 @pytest.mark.usefixtures("fixture_db")
 @pytest.mark.parametrize(
-    "resolver,limit,offset,expected_length",
+    "resolver,limit,expected_length",
     [
         # Addresses
-        ("addresses", None, None, 11),
-        ("addresses", 0, 0, 0),
-        ("addresses", 8, 0, 8),
-        ("addresses", 4, 0, 4),
-        ("addresses", 8, 1, 8),
+        ("addresses", None, 11),
+        ("addresses", 0, 0),
+        ("addresses", 8, 8),
+        ("addresses", 4, 4),
         # Associations
-        ("associations", None, None, 2),
-        ("associations", 0, 0, 0),
-        ("associations", 1, 0, 1),
+        ("associations", None, 2),
+        ("associations", 0, 0),
+        ("associations", 1, 1),
         # Classes
-        ("classes", None, None, 39),
-        ("classes", 0, 0, 0),
-        ("classes", 38, 0, 38),
-        ("classes", 10, 0, 10),
-        ("classes", 38, 1, 38),
+        ("classes", None, 39),
+        ("classes", 0, 0),
+        ("classes", 38, 38),
+        ("classes", 10, 10),
         # Employees
-        ("employees", None, None, 5),
-        ("employees", 0, 0, 0),
-        ("employees", 4, 0, 4),
-        ("employees", 2, 0, 2),
-        ("employees", 4, 2, 3),
+        ("employees", None, 5),
+        ("employees", 0, 0),
+        ("employees", 4, 4),
+        ("employees", 2, 2),
         # Engagements
-        ("engagements", None, None, 3),
-        ("engagements", 0, 0, 0),
-        ("engagements", 3, 0, 3),
-        ("engagements", 2, 0, 2),
-        ("engagements", 3, 1, 2),
+        ("engagements", None, 3),
+        ("engagements", 0, 0),
+        ("engagements", 3, 3),
+        ("engagements", 2, 2),
         # Facets
-        ("facets", None, None, 18),
-        ("facets", 0, 0, 0),
-        ("facets", 18, 0, 18),
-        ("facets", 10, 0, 10),
+        ("facets", None, 18),
+        ("facets", 0, 0),
+        ("facets", 18, 18),
+        ("facets", 10, 10),
         # It Systems
-        ("itsystems", None, None, 3),
-        ("itsystems", 0, 0, 0),
-        ("itsystems", 3, 0, 3),
-        ("itsystems", 2, 0, 2),
-        ("itsystems", 3, 1, 2),
+        ("itsystems", None, 3),
+        ("itsystems", 0, 0),
+        ("itsystems", 3, 3),
+        ("itsystems", 2, 2),
         # It Users
-        ("itusers", None, None, 2),
-        ("itusers", 0, 0, 0),
-        ("itusers", 1, 0, 1),
+        ("itusers", None, 2),
+        ("itusers", 0, 0),
+        ("itusers", 1, 1),
         # KLEs
-        ("kles", None, None, 1),
-        ("kles", 0, 0, 0),
-        ("kles", 1, 0, 1),
+        ("kles", None, 1),
+        ("kles", 0, 0),
+        ("kles", 1, 1),
         # Leaves
-        ("leaves", None, None, 2),
-        ("leaves", 0, 0, 0),
-        ("leaves", 1, 0, 1),
+        ("leaves", None, 2),
+        ("leaves", 0, 0),
+        ("leaves", 1, 1),
         # Managers
-        ("managers", None, None, 1),
-        ("managers", 0, 0, 0),
-        ("managers", 1, 0, 1),
+        ("managers", None, 1),
+        ("managers", 0, 0),
+        ("managers", 1, 1),
         # Org Units
-        ("org_units", None, None, 10),
-        ("org_units", 0, 0, 0),
-        # While OFFSET and LIMITing is done in LoRa/SQL, further filtering is sometimes
-        # applied in MO. Confusingly, this means that receiving a list shorter than the
+        ("org_units", None, 10),
+        ("org_units", 0, 0),
+        # While LIMITing is done in LoRa/SQL, further filtering is sometimes applied
+        # in MO. Confusingly, this means that receiving a list shorter than the
         # requested limit does not imply that we are at the end.
-        ("org_units", 9, 0, 9),
-        ("org_units", 11, 0, 10),
-        ("org_units", 10, 1, 9),
-        ("org_units", 10, 9, 1),
+        ("org_units", 9, 9),
+        ("org_units", 11, 10),
         # Owners
-        ("owners", None, None, 2),
-        ("owners", 0, 0, 0),
-        ("owners", 1, 0, 1),
+        ("owners", None, 2),
+        ("owners", 0, 0),
+        ("owners", 1, 1),
         # Related Units
-        ("related_units", None, None, 1),
-        ("related_units", 0, 0, 0),
-        ("related_units", 1, 0, 1),
+        ("related_units", None, 1),
+        ("related_units", 0, 0),
+        ("related_units", 1, 1),
         # Rolebindings
-        ("rolebindings", None, None, 1),
-        ("rolebindings", 0, 0, 0),
-        ("rolebindings", 1, 0, 1),
+        ("rolebindings", None, 1),
+        ("rolebindings", 0, 0),
+        ("rolebindings", 1, 1),
     ],
 )
 async def test_pagination(
     graphapi_post: GraphAPIPost,
     resolver: str,
     limit: int,
-    offset: int,
     expected_length: int,
 ) -> None:
-    """Test pagination."""
+    """Test that the first page honours the limit."""
     query = f"""
         query PaginationTestQuery($limit: int, $cursor: Cursor) {{
           {resolver}(limit: $limit, cursor: $cursor) {{
@@ -115,12 +109,7 @@ async def test_pagination(
           }}
         }}
     """
-    cursor = None
-    if offset is not None:
-        cursor = serialize_cursor(
-            Cursor(last=UUID(int=offset), registration_time=now())
-        )
-    variables = dict(limit=limit, cursor=cursor)
+    variables = dict(limit=limit, cursor=None)
     response = graphapi_post(query, variables)
     assert response.errors is None
     assert len(response.data[resolver]["objects"]) == expected_length
@@ -129,48 +118,36 @@ async def test_pagination(
 @pytest.mark.integration_test
 @pytest.mark.usefixtures("fixture_db")
 @pytest.mark.parametrize(
-    "resolver,limit,offset",
+    "resolver",
     [
-        # Addresses
-        ("addresses", 11, 11),
-        # Associations
-        ("associations", 10, 2),
-        # Classes
-        ("classes", 42, 41),
-        # Employees
-        ("employees", 10, 5),
-        # Engagements
-        ("engagements", 10, 3),
-        # Facets
-        ("facets", 20, 19),
-        # It Systems
-        ("itsystems", 10, 3),
-        # It Users
-        ("itusers", 10, 2),
-        # KLEs
-        ("kles", 10, 1),
-        # Leaves
-        ("leaves", 10, 2),
-        # Managers
-        ("managers", 10, 1),
-        # Org Units
-        ("org_units", 1, 20),
-        # Owners
-        ("owners", 1, 2),
-        ("owners", 10, 2),
-        ("owners", 20, 2),
-        # Related Units
-        ("related_units", 1, 1),
-        # Rolebindings
-        ("rolebindings", 1, 1),
-        ("rolebindings", 10, 1),
-        ("rolebindings", 20, 10),
+        "addresses",
+        "associations",
+        "classes",
+        "employees",
+        "engagements",
+        "facets",
+        "itsystems",
+        "itusers",
+        "kles",
+        "leaves",
+        "managers",
+        "org_units",
+        "owners",
+        "related_units",
+        "rolebindings",
     ],
 )
 async def test_pagination_out_of_range(
-    graphapi_post: GraphAPIPost, resolver: str, limit: int, offset: int
+    graphapi_post: GraphAPIPost, resolver: str
 ) -> None:
-    """Test that out of range pagination returns None."""
+    """Test that a cursor past the last element returns nothing and terminates.
+
+    Keyset pagination keys on the entity UUID, so a cursor whose `last` is the
+    maximum possible UUID sorts after every real row: `id > last` matches nothing.
+    """
+    exhausted_cursor = serialize_cursor(
+        Cursor(last=UUID(int=(1 << 128) - 1), registration_time=now())
+    )
     query = f"""
         query PaginationTestQuery($limit: int, $cursor: Cursor) {{
           {resolver}(limit: $limit, cursor: $cursor) {{
@@ -183,12 +160,7 @@ async def test_pagination_out_of_range(
           }}
         }}
     """
-    cursor = None
-    if offset is not None:
-        cursor = serialize_cursor(
-            Cursor(last=UUID(int=offset), registration_time=now())
-        )
-    variables = dict(limit=limit, cursor=cursor)
+    variables = dict(limit=10, cursor=exhausted_cursor)
     response = graphapi_post(query, variables)
     assert response.errors is None
     assert response.data[resolver]["objects"] == []
@@ -335,3 +307,49 @@ async def test_cursor_stable_registration(
         if stable_pagination_cursor is None:
             break
     assert original == stable_pagination_result
+
+
+@pytest.mark.integration_test
+@pytest.mark.usefixtures("empty_db")
+async def test_pagination_includes_nil_uuid(
+    graphapi_post: GraphAPIPost,
+    create_facet: Callable[[dict[str, Any]], UUID],
+) -> None:
+    """Keyset pagination must not skip an entity with the all-zeroes UUID.
+
+    The first page imposes no lower bound, so the nil UUID is returned even though
+    it would be excluded by the `column > UUID(int=0)` boundary used on subsequent
+    pages.
+    """
+    nil_uuid = str(UUID(int=0))
+    create_facet(
+        {
+            "uuid": nil_uuid,
+            "user_key": "nil-facet",
+            "validity": {"from": "1970-01-01", "to": None},
+        }
+    )
+    query = """
+        query PaginationTestQuery($limit: int, $cursor: Cursor) {
+          facets(limit: $limit, cursor: $cursor) {
+            objects {
+                uuid
+            }
+            page_info {
+                next_cursor
+            }
+          }
+        }
+    """
+    # Paginate to completion (limit=1 to exercise the cursor boundary too) and
+    # ensure the nil-UUID facet is among the returned objects.
+    seen = []
+    cursor = None
+    while True:
+        response = graphapi_post(query, {"limit": 1, "cursor": cursor})
+        assert response.errors is None
+        seen.extend(obj["uuid"] for obj in response.data["facets"]["objects"])
+        cursor = response.data["facets"]["page_info"]["next_cursor"]
+        if cursor is None:
+            break
+    assert nil_uuid in seen
