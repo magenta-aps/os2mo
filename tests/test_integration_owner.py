@@ -8,6 +8,7 @@ import freezegun
 import pytest
 from fastapi.encoders import jsonable_encoder
 from fastapi.testclient import TestClient
+from more_itertools import one
 from pydantic import BaseModel
 from pydantic import Field
 
@@ -96,6 +97,37 @@ def test_inherit_top_level_empty(service_client: TestClient) -> None:
         "GET",
         f"service/ou/{level2_ou}/details/owner",
         params={"validity": "present", "at": "2017-01-01", "inherit_owner": 1},
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.integration_test
+@pytest.mark.usefixtures("fixture_db")
+@freezegun.freeze_time("2017-01-01", tz_offset=1)
+def test_read_without_inherit(service_client: TestClient) -> None:
+    """Without inherit_owner, only directly-set owners are returned."""
+    response = service_client.request(
+        "POST",
+        "/service/details/create",
+        json=simplified_owner(uuid=func_uuid, owner=person1, org_unit=top_level_ou),
+    )
+    assert response.status_code == 201
+
+    # the org-unit with a directly-set owner returns it
+    response = service_client.request(
+        "GET",
+        f"service/ou/{top_level_ou}/details/owner",
+        params={"validity": "present", "at": "2017-01-01"},
+    )
+    assert response.status_code == 200
+    assert one(response.json())["uuid"] == str(func_uuid)
+
+    # the child org-unit does not inherit it
+    response = service_client.request(
+        "GET",
+        f"service/ou/{level2_ou}/details/owner",
+        params={"validity": "present", "at": "2017-01-01"},
     )
     assert response.status_code == 200
     assert response.json() == []
