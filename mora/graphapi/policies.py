@@ -649,7 +649,12 @@ async def _resolve_actor(info: MOInfo, token: Token) -> str:
     """
     from mora.auth.keycloak.rbac import _get_employee_uuid
 
-    return str(await _get_employee_uuid(token))
+    uuid = await _get_employee_uuid(token)
+    # A caller without a resolvable employee uuid can own nothing. Fall back to
+    # the nil UUID so ownership checks match no entity and deny cleanly, rather
+    # than feeding a malformed value (e.g. ``str(None)``) into the entity filter
+    # and raising a hard "badly formed UUID" error.
+    return str(uuid) if uuid is not None else "00000000-0000-0000-0000-000000000000"
 
 
 async def _load_current(info: MOInfo, arguments: dict) -> dict:
@@ -778,6 +783,48 @@ async def _entity_filter_grants(
     return True
 
 
+async def _applicable_rule_index(
+    info: MOInfo, token: Token
+) -> dict[tuple[str, str], list[tuple[str | None, str | None]]]:
+    """The rules of the caller's currently-valid policies, cached per request.
+
+    Every field resolve consults the policy engine, so the applicable rules --
+    the rules of the currently-valid policies whose actor matches the caller --
+    are fetched once and cached on the request context, keyed by their
+    ``(type, field)`` for O(1) candidate lookup. The caller (roles) and the
+    "current" validity instant are constant within a request, so the set is too;
+    this turns a query that resolves many fields into a single policy query.
+    """
+    context = info.context
+    if context.applicable_policy_rules is None:
+        # Pin one validity instant for the whole request.
+        if context.policy_now is None:
+            context.policy_now = now()
+        current = context.policy_now
+        actor_filter = actor_filter_for(token.realm_access.roles)
+        predicate = policy_predicate(
+            PolicyFilter(start=current, end=current, actor=actor_filter)
+        )
+        query = (
+            select(
+                db.PolicyRule.type,
+                db.PolicyRule.field,
+                db.PolicyRule.condition,
+                db.PolicyRule.filter,
+            )
+            .where(db.PolicyRule.policy_fk == db.Policy.id)
+            .where(predicate)
+        )
+        session: AsyncSession = context.session
+        index: dict[tuple[str, str], list[tuple[str | None, str | None]]] = {}
+        for rule_type, rule_field, condition, filter in (
+            await session.execute(query)
+        ).all():
+            index.setdefault((rule_type, rule_field), []).append((condition, filter))
+        context.applicable_policy_rules = index
+    return context.applicable_policy_rules
+
+
 async def actor_grants_field(
     info: MOInfo,
     token: Token,
@@ -797,24 +844,20 @@ async def actor_grants_field(
     entity ``filter``; each check-spec the filter returns names the collection it
     targets, so the collection no longer has to be derived from ``field``.
 
-    SQL narrows the work to the candidate rules (a tiny set); each is then
-    checked in Python: its condition (if any) must hold and its entity filter
-    (if any) must match. A rule with neither grants outright.
+    The applicable rules are fetched once per request (see
+    :func:`_applicable_rule_index`); the candidates for this ``(type, field)``
+    are then checked in Python: each rule's condition (if any) must hold and its
+    entity filter (if any) must match. A rule with neither grants outright.
     """
-    actor_filter = actor_filter_for(token.realm_access.roles)
-    current = now()
-    predicate = policy_predicate(
-        PolicyFilter(start=current, end=current, actor=actor_filter)
+    index = await _applicable_rule_index(info, token)
+    # Candidate rules match this exact (type, field) or a wildcard in either
+    # component (``type IN (type,'*') AND field IN (field,'*')``).
+    rules = (
+        index.get((type, field), [])
+        + index.get((type, "*"), [])
+        + index.get(("*", field), [])
+        + index.get(("*", "*"), [])
     )
-    query = (
-        select(db.PolicyRule.condition, db.PolicyRule.filter)
-        .where(db.PolicyRule.policy_fk == db.Policy.id)
-        .where(predicate)
-        .where(db.PolicyRule.type.in_([type, "*"]))
-        .where(db.PolicyRule.field.in_([field, "*"]))
-    )
-    session: AsyncSession = info.context.session
-    rules = (await session.execute(query)).all()
     if not rules:
         return False
     # Access is granted if any candidate rule is satisfied: its CEL condition
