@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: Magenta ApS <https://magenta.dk>
+# SPDX-License-Identifier: MPL-2.0
+"""Policy engine (PBAC) schema
+
+Create the ``policy``, ``policy_actor`` and ``policy_rule`` tables backing the
+policy-based access-control engine. Squashed from the incremental development
+migrations; the built-in policies are seeded by the following migration.
+"""
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+
+from alembic import op
+
+revision: str = "9f8e7d6c5b4a"
+down_revision: str | Sequence[str] | None = "cfcfa8b6102f"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "policy",
+        sa.Column(
+            "id",
+            sa.Uuid,
+            primary_key=True,
+            server_default=sa.text("uuid_generate_v4()"),
+        ),
+        sa.Column("name", sa.String(255), nullable=False),
+        sa.Column("description", sa.Text, nullable=True),
+        # "start"/"end" are SQL reserved words; SQLAlchemy quotes them.
+        sa.Column("start", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("end", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+    )
+    op.create_table(
+        "policy_actor",
+        sa.Column(
+            "pk",
+            sa.Uuid,
+            primary_key=True,
+            server_default=sa.text("uuid_generate_v4()"),
+        ),
+        # Actor attribute to match on: "role" (a Keycloak token role) or "all".
+        sa.Column("kind", sa.String(255), nullable=False),
+        sa.Column("value", sa.Text, nullable=False),
+        sa.Column("policy_fk", sa.Uuid, sa.ForeignKey("policy.id"), nullable=False),
+        # Makes `policy_actor_declare` idempotent.
+        sa.UniqueConstraint("policy_fk", "kind", "value", name="uq_policy_actor"),
+    )
+    op.create_table(
+        "policy_rule",
+        sa.Column(
+            "pk",
+            sa.Uuid,
+            primary_key=True,
+            server_default=sa.text("uuid_generate_v4()"),
+        ),
+        # GraphQL-native resource: a (type, field) pair. "type" is a GraphQL
+        # type (a collection's object type, or "Query"/"Mutation"); "field" is a
+        # field/mutator on it, or "*" for all fields.
+        sa.Column("type", sa.Text, nullable=False),
+        sa.Column("field", sa.Text, nullable=False),
+        # Optional CEL condition gating the grant; null means unconditional.
+        sa.Column("condition", sa.String(), nullable=True),
+        # Optional CEL filter returning access-check specs; null means no entity
+        # restriction.
+        sa.Column("filter", sa.String(), nullable=True),
+        sa.Column("policy_fk", sa.Uuid, sa.ForeignKey("policy.id"), nullable=False),
+    )
+    # `NULLS NOT DISTINCT` keeps unconditional / filter-less rules deduplicated,
+    # making `policy_rule_declare` idempotent (requires PostgreSQL >= 15).
+    op.execute(
+        "ALTER TABLE policy_rule ADD CONSTRAINT uq_policy_rule "
+        "UNIQUE NULLS NOT DISTINCT (policy_fk, type, field, condition, filter)"
+    )
+
+
+def downgrade() -> None:
+    op.drop_table("policy_rule")
+    op.drop_table("policy_actor")
+    op.drop_table("policy")

@@ -91,6 +91,13 @@ class Settings(BaseSettings):
         True, description="Whether to expose the Service REST API on /service"
     )
 
+    # Use the policy system (PBAC) to authorize GraphQL access instead of the
+    # role-based check. When enabled, a permission-gated field is allowed only
+    # if the calling actor has a currently-valid policy with a rule granting the
+    # field's (type, field). Defaults on (sane-by-default); legacy/role-based
+    # deployments must set this explicitly off.
+    policy_rbac: bool = True
+
     # airgapped options
     enable_dar: bool = True
 
