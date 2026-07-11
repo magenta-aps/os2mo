@@ -2,11 +2,9 @@
 # SPDX-License-Identifier: MPL-2.0
 import time
 from collections.abc import AsyncIterator
-from collections.abc import Awaitable
 from collections.abc import Callable
 from contextlib import suppress
 from functools import cache
-from types import SimpleNamespace
 from typing import Any
 from typing import cast
 
@@ -15,8 +13,6 @@ from fastapi.encoders import jsonable_encoder
 from graphql import ExecutionResult
 from graphql import GraphQLError
 from graphql import GraphQLResolveInfo
-from graphql import OperationType
-from graphql import is_introspection_type
 from pydantic import PositiveInt
 from strawberry import Schema
 from strawberry.exceptions import StrawberryGraphQLError
@@ -27,7 +23,6 @@ from strawberry.utils.await_maybe import await_maybe
 from structlog import get_logger
 
 from mora import config
-from mora.auth.exceptions import AuthorizationError
 from mora.db import get_session
 from mora.exceptions import HTTPException
 from mora.graphapi.actor import SpecialActor
@@ -54,13 +49,10 @@ from mora.graphapi.model_registration import RelatedUnitRegistration
 from mora.graphapi.model_registration import RoleBindingRegistration
 from mora.graphapi.mutators import Mutation
 from mora.graphapi.query import Query
-from mora.graphapi.rbac_map import PUBLIC_FIELDS
-from mora.graphapi.rbac_map import RBAC_MAP
 from mora.graphapi.types import CPRType
 from mora.graphapi.version import Version
 from mora.log import canonical_gql_context
 from mora.util import CPR
-from mora.util import ensure_list
 
 logger = get_logger()
 
@@ -160,100 +152,16 @@ class IsAuthenticatedExtension(SchemaExtension):
         yield
 
 
-# A policy takes the resolver info and arguments, and returns whether it
-# grants access to the field.
-Policy = Callable[[GraphQLResolveInfo, dict[str, Any]], Awaitable[bool]]
-
-
-async def introspection_policy(
-    info: GraphQLResolveInfo, kwargs: dict[str, Any]
-) -> bool:
-    """Allow access to introspection for all users."""
-    return info.field_name in (
-        "__typename",
-        "__schema",
-        "__type",
-    ) or is_introspection_type(info.parent_type)
-
-
-async def no_role_required_policy(
-    info: GraphQLResolveInfo, kwargs: dict[str, Any]
-) -> bool:
-    """Allow access to fields which are explicitly listed in `PUBLIC_FIELDS`."""
-    return (info.parent_type.name, info.field_name) in PUBLIC_FIELDS
-
-
-async def rbac_policy(
-    info: GraphQLResolveInfo,
-    kwargs: dict[str, Any],
-) -> bool:
-    """Allow access if the token has the role required by the `RBAC_MAP`."""
-    requirement = RBAC_MAP.get((info.parent_type.name, info.field_name))
-    if requirement is None:  # pragma: no cover
-        # Public fields are already allowed by the no_role_required_policy.
-        return False
-    role, _, _ = requirement
-    token = await info.context.get_token()
-    token_roles = token.realm_access.roles
-
-    # Allow access if token has required role
-    if role in token_roles:
-        return True
-    return False
-
-
-async def owner_policy(info: GraphQLResolveInfo, kwargs: dict[str, Any]) -> bool:
-    """Allow access if the user is the owner of the accessed resources."""
-    requirement = RBAC_MAP.get((info.parent_type.name, info.field_name))
-    if requirement is None:  # pragma: no cover
-        # Public fields are already allowed by the no_role_required_policy.
-        return False
-    _, collection, permission_type = requirement
-    check_kwargs = kwargs
-    if "input" in kwargs:
-        check_kwargs = {
-            **kwargs,
-            "input": [SimpleNamespace(**item) for item in ensure_list(kwargs["input"])],
-        }
-    token = await info.context.get_token()
-    token_roles = token.realm_access.roles
-
-    # Allow access if user is owner. This only works for mutations at the
-    # moment, since we need access to the object's UUID to determine ownership.
-    # The object UUID is derived from the "input" key in kwargs which holds the
-    # mutators call args. Owner is currently only implemented for mutators
-    # taking an "input" key as its input.
-    if (
-        "owner" in token_roles
-        and info.operation.operation is OperationType.MUTATION
-        and collection is not None
-        and permission_type is not None
-        and "input" in check_kwargs
-    ):
-        # Import here to avoid circular imports 🙂👍
-        from mora.auth.keycloak.rbac import check_owner
-        from mora.auth.keycloak.uuid_extractor import get_entities_graphql
-
-        input = check_kwargs["input"]
-        entities = {
-            x async for x in get_entities_graphql(input, collection, permission_type)
-        }
-        with suppress(AuthorizationError):
-            await check_owner(token, entities)
-            return True
-
-    return False
-
-
 async def pbac_policy(info: GraphQLResolveInfo, kwargs: dict[str, Any]) -> bool:
     """Allow access if a currently-valid DB policy grants this (type, field).
 
-    This is the policy-based access control (PBAC) check: rather than matching a
-    single required role, it asks the policy engine whether the calling actor
-    has a currently-valid policy with a rule granting the accessed GraphQL
-    `(type, field)`. The bootstrapped built-in policies (Legacy, Owner, Reader,
-    Administrator) reproduce the role- and owner-based behaviour, so under PBAC
-    this policy replaces both `rbac_policy` and `owner_policy`.
+    Policy-based access control is the *only* authorization path: access to a
+    field is allowed iff the calling actor has a currently-valid policy with a
+    rule granting the accessed GraphQL `(type, field)`. The bootstrapped built-in
+    policies define all access -- Introspection and Public (both bound to every
+    actor), Legacy (role-based), Owner, Reader, Administrator and the Policy
+    Administrator. There is no static map and no reject/allow logic in code
+    beyond this single delegation.
     """
     # Deferred imports to avoid a circular import at module load.
     from strawberry.types.arguments import convert_arguments
@@ -263,14 +171,29 @@ async def pbac_policy(info: GraphQLResolveInfo, kwargs: dict[str, Any]) -> bool:
     from mora.graphapi.policies import actor_grants_field
 
     token = await info.context.get_token()
-    # The chain hands us the raw `GraphQLResolveInfo`, but `actor_grants_field`
-    # (and the resolver predicates its entity filters call) expect a Strawberry
-    # `Info`, whose `.schema` is the `CustomSchema` -- the raw info exposes the
-    # graphql-core schema instead. Wrap it in a Strawberry `Info` (its `.context`
-    # and `.schema` then resolve correctly) using the field's Strawberry
-    # definition, which Strawberry stores on the graphql field's extensions.
-    field = info.parent_type.fields[info.field_name]
-    strawberry_field = field.extensions["strawberry-definition"]
+
+    # `actor_grants_field` (and the resolver predicates its entity filters call)
+    # expect a Strawberry `Info`, whose `.schema` is the `CustomSchema`. Rebuild
+    # one from the raw `GraphQLResolveInfo` using the field's Strawberry
+    # definition (stored on the graphql field's extensions). Introspection
+    # meta-fields (`__typename`, `__schema`, `__type`) are absent from
+    # `parent_type.fields`, and introspection-type fields (`__Type.name`, ...)
+    # carry no Strawberry definition; for those there are no arguments to convert
+    # and no entity filter can apply, so the raw info (only `.context.session` is
+    # read) is passed through directly.
+    gql_field = info.parent_type.fields.get(info.field_name)
+    strawberry_field = (
+        gql_field.extensions.get("strawberry-definition") if gql_field else None
+    )
+    if strawberry_field is None:
+        return await actor_grants_field(
+            cast(MOInfo, info),
+            token,
+            info.parent_type.name,
+            info.field_name,
+            arguments={},
+        )
+
     strawberry_info = cast(
         MOInfo, StrawberryInfo(_raw_info=info, _field=strawberry_field)
     )
@@ -295,49 +218,21 @@ async def pbac_policy(info: GraphQLResolveInfo, kwargs: dict[str, Any]) -> bool:
     )
 
 
-# The legacy chain checks a required role (+ owner fallback) directly. The PBAC
-# chain delegates the same decision to the policy engine. `introspection_policy`
-# and `no_role_required_policy` are shared so introspection and fields marked
-# public (`None`) in `RBAC_MAP` stay accessible without a DB rule.
-LEGACY_POLICIES: list[Policy] = [
-    introspection_policy,
-    no_role_required_policy,
-    rbac_policy,
-    owner_policy,
-]
-PBAC_POLICIES: list[Policy] = [
-    introspection_policy,
-    no_role_required_policy,
-    pbac_policy,
-]
-
-
 async def _enforce_pbac(
     info: GraphQLResolveInfo,
     kwargs: dict[str, Any],
 ) -> None:
-    """Check the active policy chain and raise `GraphQLError` if none allow access.
-
-    The chain is selected per request: the policy engine (PBAC) when
-    `policy_rbac` is enabled, otherwise the legacy role-based chain. The setting
-    is read per request because the schema is built once and cached.
-    """
-    policies = PBAC_POLICIES if config.get_settings().policy_rbac else LEGACY_POLICIES
-    for policy in policies:
-        if await policy(info, kwargs):
-            return
-    raise GraphQLError("No policy approved the access")
+    """Raise `GraphQLError` unless a DB policy grants access to this field."""
+    if not await pbac_policy(info, kwargs):
+        raise GraphQLError("No policy approved the access")
 
 
 class RBACExtension(SchemaExtension):
     """Schema-level extension that enforces access control for every field.
 
-    Each field access is checked against the active policy chain
-    (`PBAC_POLICIES` or `LEGACY_POLICIES`, selected by the `policy_rbac`
-    setting), one policy at a time, until a policy allows access.
-
-    Access is rejected by default: every field must be listed in
-    `PUBLIC_FIELDS` or have a requirement in `RBAC_MAP`.
+    Every field access is checked by `pbac_policy` against the database-managed
+    policies. Access is rejected by default: a field granted by no policy raises
+    `"No policy approved the access"`.
     """
 
     async def resolve(  # type: ignore[override]

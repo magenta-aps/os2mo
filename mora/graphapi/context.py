@@ -3,6 +3,8 @@
 from collections.abc import Awaitable
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 from typing import TypeAlias
 from uuid import UUID
 
@@ -60,6 +62,13 @@ class MOContext(BaseContext):
     amqp_system: AMQPSystem
     session: db.AsyncSession
     dataloaders: MOLoaders
+    # Per-request authorization cache. Every field resolve consults the policy
+    # engine (`actor_grants_field`); since the caller and the "current" instant
+    # are constant within a request, the caller's applicable policy rules are
+    # fetched once and cached here, indexed by `(type, field)`, and `policy_now`
+    # pins the single validity instant used for that fetch.
+    applicable_policy_rules: dict[tuple[str, str], list[Any]] | None = None
+    policy_now: datetime | None = None
 
 
 MOInfo: TypeAlias = Info[MOContext, None]
