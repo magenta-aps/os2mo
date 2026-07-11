@@ -357,13 +357,15 @@ async def test_policy_actor_delete(graphapi_post: GraphAPIPost, empty_db) -> Non
 
 @pytest.mark.integration_test
 async def test_policy_actor_filter_cases(graphapi_post: GraphAPIPost, empty_db) -> None:
-    # Remove the catch-all "Legacy" bootstrap policy: its "all" actor matches
-    # every actor filter (covered by test_policy_actor_all_matches_any_filter)
-    # and would otherwise appear in every result below.
-    legacy = next(
-        p["uuid"] for p in read_policies(graphapi_post) if p["name"] == "Legacy"
-    )
-    graphapi_post(DELETE_POLICY, variables={"uuid": legacy})
+    # The bootstrap "Legacy", "Public" and "Introspection" policies each have an
+    # "all" actor that matches every role-based actor filter (covered by
+    # test_policy_actor_all_matches_any_filter). Exclude them from the observed
+    # sets so these cases isolate role-based matching. They are not deleted: the
+    # "Public" policy grants the (public) Policy object fields this test reads.
+    catch_all = {"Legacy", "Public", "Introspection"}
+
+    def names_for(filter: dict | None) -> set[str]:
+        return policy_names_for_filter(graphapi_post, filter) - catch_all
 
     # role-policy is bound to role "admin"; reader-policy to role "reader";
     # unbound-policy has no actors. The bootstrap "Policy Administrator" is
@@ -396,38 +398,35 @@ async def test_policy_actor_filter_cases(graphapi_post: GraphAPIPost, empty_db) 
     admins = {"role-policy", "Policy Administrator", "Administrator"}
 
     # No actor constraint -> all policies (including the actor-less one).
-    assert {p["name"] for p in read_policies(graphapi_post)} == everything  # omitted
-    assert policy_names_for_filter(graphapi_post, None) == everything  # null
-    assert policy_names_for_filter(graphapi_post, {}) == everything  # {}
-    assert policy_names_for_filter(graphapi_post, {"actor": None}) == everything
+    assert {
+        p["name"] for p in read_policies(graphapi_post)
+    } - catch_all == everything  # omitted
+    assert names_for(None) == everything  # null
+    assert names_for({}) == everything  # {}
+    assert names_for({"actor": None}) == everything
 
     # Empty actor filter -> policies that have *any* actor (excludes unbound).
-    assert policy_names_for_filter(graphapi_post, {"actor": {}}) == has_actor
+    assert names_for({"actor": {}}) == has_actor
 
     # Matching by role. Both role-policy and the bootstrap policy are bound to
     # "admin"; "reader" matches reader-policy and the bootstrap "Reader".
-    assert (
-        policy_names_for_filter(graphapi_post, {"actor": {"roles": ["admin"]}})
-        == admins
-    )
-    assert policy_names_for_filter(graphapi_post, {"actor": {"roles": ["reader"]}}) == {
+    assert names_for({"actor": {"roles": ["admin"]}}) == admins
+    assert names_for({"actor": {"roles": ["reader"]}}) == {
         "reader-policy",
         "Reader",
     }
 
     # An empty list matches nothing.
-    assert policy_names_for_filter(graphapi_post, {"actor": {"roles": []}}) == set()
+    assert names_for({"actor": {"roles": []}}) == set()
 
     # Multiple roles are OR'ed together.
-    assert policy_names_for_filter(
-        graphapi_post, {"actor": {"roles": ["admin", "reader"]}}
-    ) == admins | {"reader-policy", "Reader"}
+    assert names_for({"actor": {"roles": ["admin", "reader"]}}) == admins | {
+        "reader-policy",
+        "Reader",
+    }
 
     # No actor matches a non-existent role.
-    assert (
-        policy_names_for_filter(graphapi_post, {"actor": {"roles": ["nobody"]}})
-        == set()
-    )
+    assert names_for({"actor": {"roles": ["nobody"]}}) == set()
 
 
 @pytest.mark.integration_test
