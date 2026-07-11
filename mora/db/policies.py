@@ -25,10 +25,8 @@ class Policy(Base):
     )
     name: Mapped[str]
     description: Mapped[str | None]
-    # Validity is modelled as two plain timestamps. A null `end` means the policy
-    # is open-ended. This is not bitemporal like the LoRa entities.
-    start: Mapped[datetime]
-    end: Mapped[datetime | None]
+    # Whether the policy is in effect. A policy only grants access while active.
+    activated: Mapped[bool]
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
 
     actors: Mapped[list["PolicyActor"]] = relationship(

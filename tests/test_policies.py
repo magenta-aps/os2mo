@@ -17,8 +17,7 @@ DECLARE_POLICY = """
       uuid
       name
       description
-      start
-      end
+      activated
     }
   }
 """
@@ -30,8 +29,7 @@ READ_POLICIES = """
         uuid
         name
         description
-        start
-        end
+        activated
       }
     }
   }
@@ -134,9 +132,7 @@ def read_policies(graphapi_post: GraphAPIPost) -> list[dict]:
 
 
 def create_policy(graphapi_post: GraphAPIPost, name: str) -> str:
-    response = declare_policy(
-        graphapi_post, name=name, start="2024-01-01T00:00:00+00:00"
-    )
+    response = declare_policy(graphapi_post, name=name)
     assert response.errors is None
     return response.data["policy_declare"]["uuid"]
 
@@ -195,13 +191,13 @@ async def test_policy_create_and_read(graphapi_post: GraphAPIPost, empty_db) -> 
         graphapi_post,
         name="GDPR",
         description="Data protection policy",
-        start="2024-01-01T00:00:00+00:00",
     )
     assert response.errors is None
     created = response.data["policy_declare"]
     assert created["name"] == "GDPR"
     assert created["description"] == "Data protection policy"
-    assert created["end"] is None
+    # Policies default to activated on declare.
+    assert created["activated"] is True
 
     policies = {p["uuid"]: p for p in read_policies(graphapi_post)}
     assert created["uuid"] in policies
@@ -215,9 +211,7 @@ async def test_policy_declare_updates_existing(
     graphapi_post: GraphAPIPost, empty_db
 ) -> None:
     baseline = len(read_policies(graphapi_post))
-    created = declare_policy(
-        graphapi_post, name="Initial", start="2024-01-01T00:00:00+00:00"
-    )
+    created = declare_policy(graphapi_post, name="Initial")
     uuid = created.data["policy_declare"]["uuid"]
 
     updated = declare_policy(
@@ -225,15 +219,14 @@ async def test_policy_declare_updates_existing(
         uuid=uuid,
         name="Renamed",
         description="now with a description",
-        start="2024-01-01T00:00:00+00:00",
-        end="2025-01-01T00:00:00+00:00",
+        activated=False,
     )
     assert updated.errors is None
     obj = updated.data["policy_declare"]
     assert obj["uuid"] == uuid
     assert obj["name"] == "Renamed"
     assert obj["description"] == "now with a description"
-    assert obj["end"] is not None
+    assert obj["activated"] is False
 
     # Declaring with a uuid updates rather than creates: just one new policy.
     assert len(read_policies(graphapi_post)) == baseline + 1
@@ -249,7 +242,6 @@ async def test_policy_declare_with_uuid_creates(
         graphapi_post,
         uuid=NOT_FOUND_UUID,
         name="client-uuid",
-        start="2024-01-01T00:00:00+00:00",
     )
     assert response.errors is None
     assert response.data["policy_declare"]["uuid"] == NOT_FOUND_UUID
@@ -260,9 +252,7 @@ async def test_policy_declare_with_uuid_creates(
 
 @pytest.mark.integration_test
 async def test_policy_delete(graphapi_post: GraphAPIPost, empty_db) -> None:
-    created = declare_policy(
-        graphapi_post, name="ToDelete", start="2024-01-01T00:00:00+00:00"
-    )
+    created = declare_policy(graphapi_post, name="ToDelete")
     uuid = created.data["policy_declare"]["uuid"]
 
     deleted = graphapi_post(DELETE_POLICY, variables={"uuid": uuid})
@@ -277,9 +267,7 @@ async def test_policy_delete(graphapi_post: GraphAPIPost, empty_db) -> None:
 
 @pytest.mark.integration_test
 async def test_policy_filter_by_uuid(graphapi_post: GraphAPIPost, empty_db) -> None:
-    created = declare_policy(
-        graphapi_post, name="Filtered", start="2024-01-01T00:00:00+00:00"
-    )
+    created = declare_policy(graphapi_post, name="Filtered")
     uuid = created.data["policy_declare"]["uuid"]
 
     response = graphapi_post(FILTER_POLICIES, variables={"uuids": [uuid]})
@@ -296,9 +284,7 @@ async def test_policy_pagination(graphapi_post: GraphAPIPost, empty_db) -> None:
     baseline = len(read_policies(graphapi_post))
     created: set[str] = set()
     for i in range(5):
-        response = declare_policy(
-            graphapi_post, name=f"policy-{i}", start="2024-01-01T00:00:00+00:00"
-        )
+        response = declare_policy(graphapi_post, name=f"policy-{i}")
         assert response.errors is None
         created.add(response.data["policy_declare"]["uuid"])
 
@@ -448,7 +434,6 @@ async def test_policyadmin_cannot_be_modified(
         graphapi_post,
         uuid=POLICYADMIN,
         name="Hacked",
-        start="2024-01-01T00:00:00+00:00",
     )
     assert update.errors is not None
 
@@ -782,16 +767,11 @@ async def test_pbac_grant_via_policy(
 
 
 @pytest.mark.integration_test
-async def test_pbac_grant_respects_validity(
+async def test_pbac_grant_respects_activation(
     graphapi_post: GraphAPIPost, set_settings, set_auth, empty_db
 ) -> None:
-    # A policy that has already ended does not grant access.
-    response = declare_policy(
-        graphapi_post,
-        name="expired",
-        start="2000-01-01T00:00:00+00:00",
-        end="2001-01-01T00:00:00+00:00",
-    )
+    # A deactivated policy does not grant access.
+    response = declare_policy(graphapi_post, name="inactive", activated=False)
     policy = response.data["policy_declare"]["uuid"]
     declare_actor(graphapi_post, policy, "role", "employee-reader")
     declare_rule(graphapi_post, policy, "Query", "employees")

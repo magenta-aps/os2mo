@@ -1887,8 +1887,7 @@ class Mutation:
 
         policy.name = input.name
         policy.description = input.description
-        policy.start = input.start
-        policy.end = input.end
+        policy.activated = input.activated
 
         await session.flush()
 
@@ -1896,8 +1895,7 @@ class Mutation:
             uuid=policy.id,
             name=policy.name,
             description=policy.description,
-            start=policy.start,
-            end=policy.end,
+            activated=policy.activated,
         )
 
     @strawberry.mutation(

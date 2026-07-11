@@ -30,9 +30,13 @@ def upgrade() -> None:
         ),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column("description", sa.Text, nullable=True),
-        # "start"/"end" are SQL reserved words; SQLAlchemy quotes them.
-        sa.Column("start", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("end", sa.DateTime(timezone=True), nullable=True),
+        # Whether the policy is in effect; a policy only grants access while active.
+        sa.Column(
+            "activated",
+            sa.Boolean,
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

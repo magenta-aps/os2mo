@@ -869,8 +869,8 @@ class EventRerunInput:
         """\
         Declare a policy.
 
-        Describes the state a policy should have (`name` and `description`)
-        within a validity interval (`start`, `end`).
+        Describes the state a policy should have (`name`, `description` and
+        whether it is `activated`).
 
         Omit `uuid` to create a new policy. Supply `uuid` to update the existing
         policy with that ID.
@@ -886,9 +886,9 @@ class PolicyDeclareInput:
     description: str | None = strawberry.field(
         default=None, description="Description of the policy."
     )
-    start: datetime = strawberry.field(description="Start of the policy's validity.")
-    end: datetime | None = strawberry.field(
-        default=None, description="End of the policy's validity, if applicable."
+    activated: bool = strawberry.field(
+        default=True,
+        description="Whether the policy is in effect. Defaults to true.",
     )
 
 

@@ -239,9 +239,9 @@ class Myself:
 
             The actor filter is seeded from the client itself (its RBAC roles),
             so only policies that apply to the caller are returned. The result
-            can be further restricted by policy UUID
-            and validity window (`start`/`end`); when no window is given, all
-            applicable policies are returned regardless of validity.
+            can be further restricted by policy UUID and activation state
+            (`activated`); when unrestricted, both active and inactive
+            applicable policies are returned.
             """
         ),
     )

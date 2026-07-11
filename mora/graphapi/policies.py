@@ -28,7 +28,6 @@ from mora.graphapi.policy_cel import build_filter_base_vars
 from mora.graphapi.policy_cel import evaluate_condition
 from mora.graphapi.policy_cel import evaluate_filter
 from mora.graphapi.policy_cel import validate_filter
-from mora.util import now
 
 from .paged import CursorType
 from .paged import LimitType
@@ -71,17 +70,13 @@ class PolicyFilter:
     uuids: list[UUID] | None = strawberry.field(
         default=None, description=gen_filter_string("UUID", "uuids")
     )
-    start: datetime | None = strawberry.field(
+    activated: bool | None = strawberry.field(
         default=None,
         description=(
-            "Only return policies whose validity has not ended before this "
-            "point. Combine with `end` to limit to policies valid in an "
-            "interval (e.g. set both to 'now' for currently-valid policies)."
+            "Limit to policies with this activation state. When omitted or null, "
+            "policies are not filtered by activation (set `true` for the "
+            "currently-effective policies)."
         ),
-    )
-    end: datetime | None = strawberry.field(
-        default=None,
-        description="Only return policies that have started by this point.",
     )
     actor: PolicyActorFilter | None = strawberry.field(
         default=None,
@@ -325,13 +320,8 @@ def policy_predicate(filter: PolicyFilter) -> ColumnElement:
     if filter.uuids is not None:
         predicates.append(db.Policy.id.in_(filter.uuids))
 
-    # Validity overlap: a policy is valid over [start, end) (a null end means
-    # open-ended), so it overlaps the queried [filter.start, filter.end] window
-    # when it started by `end` and has not ended before `start`.
-    if filter.start is not None:
-        predicates.append(or_(db.Policy.end.is_(None), db.Policy.end >= filter.start))
-    if filter.end is not None:
-        predicates.append(db.Policy.start <= filter.end)
+    if filter.activated is not None:
+        predicates.append(db.Policy.activated == filter.activated)
 
     if filter.actor is not None:
         predicates.append(_policy_actor_predicate(filter.actor))
@@ -391,10 +381,7 @@ class Policy:
     uuid: UUID = strawberry.field(description="UUID of the policy.")
     name: str = strawberry.field(description="Name of the policy.")
     description: str | None = strawberry.field(description="Description of the policy.")
-    start: datetime = strawberry.field(description="Start of the policy's validity.")
-    end: datetime | None = strawberry.field(
-        description="End of the policy's validity, if applicable."
-    )
+    activated: bool = strawberry.field(description="Whether the policy is in effect.")
 
     @strawberry.field(description="Actors this policy applies to.")
     async def actors(root: "Policy", info: MOInfo) -> list[PolicyActor]:
@@ -436,8 +423,7 @@ def _to_policy(policy: "db.Policy") -> Policy:
         uuid=policy.id,
         name=policy.name,
         description=policy.description,
-        start=policy.start,
-        end=policy.end,
+        activated=policy.activated,
     )
 
 
@@ -479,13 +465,9 @@ def actor_filter_for(roles: Collection[str]) -> PolicyActorFilter:
 
 
 async def actor_policies(info: MOInfo, token: Token) -> list[Policy]:
-    """Return the currently-valid policies applicable to the given token's actor."""
+    """Return the active policies applicable to the given token's actor."""
     actor_filter = actor_filter_for(token.realm_access.roles)
-    # Only currently-valid policies are relevant right now.
-    current = now()
-    predicate = policy_predicate(
-        PolicyFilter(start=current, end=current, actor=actor_filter)
-    )
+    predicate = policy_predicate(PolicyFilter(activated=True, actor=actor_filter))
     session: AsyncSession = info.context.session
     result = await session.scalars(select(db.Policy).where(predicate))
     return [_to_policy(policy) for policy in result]
@@ -789,22 +771,16 @@ async def _applicable_rule_index(
     """The rules of the caller's currently-valid policies, cached per request.
 
     Every field resolve consults the policy engine, so the applicable rules --
-    the rules of the currently-valid policies whose actor matches the caller --
-    are fetched once and cached on the request context, keyed by their
-    ``(type, field)`` for O(1) candidate lookup. The caller (roles) and the
-    "current" validity instant are constant within a request, so the set is too;
-    this turns a query that resolves many fields into a single policy query.
+    the rules of the active policies whose actor matches the caller -- are
+    fetched once and cached on the request context, keyed by their
+    ``(type, field)`` for O(1) candidate lookup. The caller (roles) is constant
+    within a request, so the set is too; this turns a query that resolves many
+    fields into a single policy query.
     """
     context = info.context
     if context.applicable_policy_rules is None:
-        # Pin one validity instant for the whole request.
-        if context.policy_now is None:
-            context.policy_now = now()
-        current = context.policy_now
         actor_filter = actor_filter_for(token.realm_access.roles)
-        predicate = policy_predicate(
-            PolicyFilter(start=current, end=current, actor=actor_filter)
-        )
+        predicate = policy_predicate(PolicyFilter(activated=True, actor=actor_filter))
         query = (
             select(
                 db.PolicyRule.type,
