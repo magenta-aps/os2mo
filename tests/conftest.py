@@ -23,6 +23,7 @@ from uuid import uuid4
 
 import pytest
 import requests
+from _pytest.monkeypatch import MonkeyPatch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from hypothesis import Verbosity
@@ -73,6 +74,11 @@ h_settings.register_profile(
 )
 h_settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "dev"))
 
+# The test suite is a legacy, role-based consumer, so it opts out of the policy
+# permission engine (PBAC) by default. Tests that exercise PBAC opt back in via
+# `set_settings(POLICY_RBAC="true")`.
+os.environ.setdefault("POLICY_RBAC", "false")
+
 
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -121,6 +127,36 @@ def clear_actor_cache():
 @pytest.fixture(autouse=True)
 def clear_settings_cache() -> None:
     """Clear the ``get_settings`` cache so each test reads its env overrides freshly."""
+    get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _default_pbac_off(monkeypatch: MonkeyPatch) -> None:
+    """Opt the whole suite out of the policy engine (PBAC) by default.
+
+    `policy_rbac` defaults on in production, but the test suite is a legacy,
+    role-based consumer. Forcing it off per test (via monkeypatch, plus a cache
+    clear) is reliable where the module-level env default is not -- settings are
+    lru-cached and monkeypatch/hypothesis restore env between tests. Tests that
+    exercise PBAC re-enable it with `set_settings(POLICY_RBAC="true")`, which
+    runs after this fixture and wins.
+    """
+    monkeypatch.setenv("POLICY_RBAC", "false")
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def set_settings(
+    monkeypatch: MonkeyPatch,
+) -> YieldFixture[Callable[..., None]]:
+    """Set settings via kwargs callback."""
+
+    def _inner(**kwargs: Any) -> None:
+        for key, value in kwargs.items():
+            monkeypatch.setenv(key, value)
+        get_settings.cache_clear()
+
+    yield _inner
     get_settings.cache_clear()
 
 
