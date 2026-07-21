@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Magenta ApS <https://magenta.dk>
 # SPDX-License-Identifier: MPL-2.0
 from asyncio import Future
+from collections.abc import AsyncIterator
+from collections.abc import Callable
 from copy import deepcopy
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -9,6 +11,8 @@ from unittest.mock import patch
 from uuid import UUID
 
 import pytest
+from aioresponses import aioresponses
+from fastapi.encoders import jsonable_encoder
 from fastapi.testclient import TestClient
 from os2mo_http_trigger_protocol import MOTriggerRegister
 from starlette.datastructures import ImmutableMultiDict
@@ -21,7 +25,6 @@ from mora.service.orgunit import UnitDetails
 from mora.service.orgunit import get_one_orgunit
 from mora.service.orgunit import get_unit_ancestor_tree
 from mora.triggers import Trigger
-from mora.triggers.internal.http_trigger import HTTPTriggerException
 from mora.triggers.internal.http_trigger import register
 from oio_rest.organisation import OrganisationEnhed
 from tests import util
@@ -177,6 +180,65 @@ async def test_unit_past(monkeypatch, service_client: TestClient) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def reset_trigger_registry():
+    """Clear the process-global ``Trigger.registry`` after every test.
+
+    ``Trigger.registry`` is a class attribute shared across the whole process.
+    App startup only ever *adds* to it (it never clears), so an http trigger a
+    test registers against ``http://whatever`` would otherwise survive and fire
+    a real POST during any later test that refreshes an org unit. Clearing it
+    here drops that trigger; the amqp triggers are re-added by the next app
+    startup.
+    """
+    yield
+    Trigger.registry = {}
+
+
+@pytest.fixture
+async def refresh_trigger() -> AsyncIterator[aioresponses]:
+    """A boundary-mocked external http-trigger with a refresh trigger registered.
+
+    Fetches `/triggers` and registers an `http_sender` exactly as `create_app`
+    does on startup, but against the aioresponses boundary mock, so the real
+    `http_trigger` registration and dispatch code runs. The registry is cleared
+    first so the refresh dispatches only this trigger, not the amqp trigger the
+    app registers on startup; request this fixture *after* `service_client` so
+    that clear runs after app startup.
+
+    Yields the mock so tests can add the trigger's response and inspect the
+    request it received.
+    """
+    with aioresponses() as mock:
+        mock.get(
+            "http://whatever/triggers",
+            payload=jsonable_encoder(
+                [
+                    MOTriggerRegister(
+                        event_type=mapping.EventType.ON_BEFORE,
+                        request_type=mapping.RequestType.REFRESH,
+                        role_type="org_unit",
+                        url="/triggers/ou/refresh",
+                    )
+                ]
+            ),
+        )
+        Trigger.registry = {}
+        with util.override_config(Settings(http_endpoints=["http://whatever"])):
+            await register(None)
+        yield mock
+
+
+def trigger_payloads(trigger_service: aioresponses, url: str) -> list[dict]:
+    """Return the JSON bodies POSTed to `url`, as captured at the boundary."""
+    return [
+        call.kwargs["json"]
+        for (method, called_url), calls in trigger_service.requests.items()
+        for call in calls
+        if method == "POST" and str(called_url) == url
+    ]
+
+
 class CopyingMock(MagicMock):
     """MagicMock that refers to its arguments by value instead of by reference.
 
@@ -229,50 +291,41 @@ def get_one_org_mock():
         yield mock
 
 
+@pytest.mark.integration_test
+@pytest.mark.usefixtures("empty_db")
 async def test_returns_integration_error_on_wrong_status(
-    service_client: TestClient, get_one_org_mock, t_sender_mock, t_fetch_mock
-):
-    with util.override_config(Settings(http_endpoints=["http://whatever"])):
-        t_fetch_mock.return_value = [
-            MOTriggerRegister(
-                **{
-                    "event_type": mapping.EventType.ON_BEFORE,
-                    "request_type": mapping.RequestType.REFRESH,
-                    "role_type": "org_unit",
-                    "url": "/triggers/ou/refresh",
-                }
-            )
-        ]
-        Trigger.registry = {}
-        await register(None)
-        t_fetch_mock.assert_called()
+    create_org_unit: Callable[[str, UUID | None], UUID],
+    service_client: TestClient,
+    refresh_trigger: aioresponses,
+) -> None:
+    """A non-200 from the external http-trigger fails the refresh with an
+    INTEGRATION_ERROR carrying the external service's `detail`."""
+    unit_uuid = create_org_unit("Kolding Kommune")
 
     error_msg = "Something horrible happened"
-    response_future = Future()
-    response_future.set_exception(HTTPTriggerException(error_msg))
-    t_sender_mock.side_effect = response_future
-
-    get_one_org_mock.return_value = {"whatever": 123}
-    response = service_client.request(
-        "GET", "/service/ou/44c86c7a-cfe0-447e-9706-33821b5721a4/refresh"
+    refresh_trigger.post(
+        "http://whatever/triggers/ou/refresh",
+        status=400,
+        payload={"detail": error_msg},
     )
+
+    response = service_client.get(f"/service/ou/{unit_uuid}/refresh")
+
     assert response.status_code == 400
     result = response.json()
-    assert "INTEGRATION_ERROR" in result.get("error_key")
-    assert error_msg in result.get("description")
+    assert "INTEGRATION_ERROR" in result["error_key"]
+    assert error_msg in result["description"]
 
-    t_sender_mock.assert_called_with(
-        "http://whatever/triggers/ou/refresh",
-        {
-            "request_type": mapping.RequestType.REFRESH,
-            "request": {"uuid": "44c86c7a-cfe0-447e-9706-33821b5721a4"},
-            "role_type": "org_unit",
-            "event_type": mapping.EventType.ON_BEFORE,
-            "org_unit_uuid": "44c86c7a-cfe0-447e-9706-33821b5721a4",
-            "uuid": "44c86c7a-cfe0-447e-9706-33821b5721a4",
-        },
-        timeout=5,
+    (payload,) = trigger_payloads(
+        refresh_trigger, "http://whatever/triggers/ou/refresh"
     )
+    assert payload == {
+        "request_type": mapping.RequestType.REFRESH,
+        "request": {"uuid": str(unit_uuid)},
+        "role_type": "org_unit",
+        "event_type": mapping.EventType.ON_BEFORE,
+        "uuid": str(unit_uuid),
+    }
 
 
 async def test_returns_message_on_success(
