@@ -32,6 +32,7 @@ from strawberry.dataloader import DataLoader
 from strawberry.types.arguments import convert_argument
 
 from mora.auth.keycloak.models import Token
+from mora.config import Settings
 from mora.db import AsyncSession
 from mora.db import BrugerRegistrering
 from mora.db import Collection
@@ -45,7 +46,9 @@ from mora.db import Policy
 from mora.db import PolicyReadRule
 from mora.db import PolicyReadRuleField
 from mora.graphapi import filters
+from mora.graphapi import policy_cel
 from mora.graphapi import resolvers
+from mora.graphapi.version import Version
 
 # OIDC token role
 Role: TypeAlias = str
@@ -245,17 +248,43 @@ def collection_denials(
     )
 
 
+def condition2predicate(
+    settings: Settings,
+    collection: Collection,
+    graphql_version: int,
+    condition: str,
+    token: Token,
+) -> ColumnElement[bool]:
+    """The clause a rule grants under, a rule without a condition reaching every object."""
+    if not condition:
+        return true()
+    # Imported here, the schema importing this module in turn
+    from mora.graphapi.schema import get_schema
+
+    version = Version(graphql_version)
+    filter = parse_filter(
+        get_schema(version), collection, policy_cel.evaluate(condition, token)
+    )
+    return PREDICATE_OF_COLLECTION[collection](
+        settings=settings, version=version, filter=filter
+    )
+
+
 async def policy_load_fn(
     session: AsyncSession,
+    settings: Settings,
     get_token: Callable[[], Awaitable[Token]],
     keys: list[int],
 ) -> list[list[Rule]]:
     """Load the rules of the active policies granted to the caller's roles."""
-    roles = (await get_token()).realm_access.roles
+    token = await get_token()
+    roles = token.realm_access.roles
     rows = await session.execute(
         select(
             Policy.role,
             PolicyReadRule.collection,
+            PolicyReadRule.graphql_version,
+            PolicyReadRule.condition,
             func.array_agg(PolicyReadRuleField.field),
         )
         .join(Policy.read_rules)
@@ -264,17 +293,24 @@ async def policy_load_fn(
             Policy.role == any_(literal(roles, ARRAY(String))),
             Policy.active,
         )
-        .group_by(Policy.role, PolicyReadRule.pk, PolicyReadRule.collection)
+        .group_by(
+            Policy.role,
+            PolicyReadRule.pk,
+            PolicyReadRule.collection,
+            PolicyReadRule.graphql_version,
+            PolicyReadRule.condition,
+        )
     )
     rules = [
         Rule(
             role=role,
             collection=collection,
-            # A row carries no condition, so its rule reaches every object
-            condition=true(),
+            condition=condition2predicate(
+                settings, collection, graphql_version, condition, token
+            ),
             fields=frozenset(fields),
         )
-        for role, collection, fields in rows
+        for role, collection, graphql_version, condition, fields in rows
     ]
     return [rules for _ in keys]
 
@@ -311,11 +347,12 @@ async def access_load_fn(
 
 def get_access_loaders(
     session: AsyncSession,
+    settings: Settings,
     get_token: Callable[[], Awaitable[Token]],
 ) -> dict[str, DataLoader]:
     """Return the dataloader deciding what the caller may read."""
     policy_loader: DataLoader[int, list[Rule]] = DataLoader(
-        load_fn=partial(policy_load_fn, session, get_token)
+        load_fn=partial(policy_load_fn, session, settings, get_token)
     )
 
     return {

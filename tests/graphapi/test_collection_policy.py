@@ -16,6 +16,7 @@ from sqlalchemy import literal
 from sqlalchemy import true
 from strawberry.dataloader import DataLoader
 
+from mora.config import get_settings
 from mora.db import AsyncSession
 from mora.db import Collection
 from mora.db import OrganisationFunktionRegistrering
@@ -272,7 +273,9 @@ async def test_the_rules_of_the_callers_policies_are_loaded(
     )
     await empty_db.flush()
 
-    rules = one(await policy_load_fn(empty_db, token_getter_of("auditor"), [0]))
+    rules = one(
+        await policy_load_fn(empty_db, get_settings(), token_getter_of("auditor"), [0])
+    )
     rule = one(rules)
 
     assert rule.role == "auditor"
@@ -301,4 +304,6 @@ async def test_a_policy_switched_off_grants_nothing(empty_db: AsyncSession) -> N
     )
     await empty_db.flush()
 
-    assert await policy_load_fn(empty_db, token_getter_of("auditor"), [0]) == [[]]
+    assert await policy_load_fn(
+        empty_db, get_settings(), token_getter_of("auditor"), [0]
+    ) == [[]]
