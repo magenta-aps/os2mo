@@ -29,6 +29,7 @@ from mora.graphapi.policies import access_load_fn
 from mora.graphapi.policies import policy_load_fn
 from mora.graphapi.schema import collection_policy
 from mora.graphapi.version import LATEST_VERSION
+from tests.conftest import BRUCE_UUID
 from tests.conftest import token_getter_of
 
 
@@ -228,6 +229,83 @@ async def test_a_condition_unknown_of_an_object_grants_nothing_on_it(
         [
             AccessKey(Collection.Address, matched, "value"),
             AccessKey(Collection.Address, unmatched, "value"),
+        ],
+    )
+
+    assert allowed == [True, False]
+
+
+@pytest.mark.integration_test
+async def test_a_condition_narrows_a_rule_to_the_objects_it_names(
+    empty_db: AsyncSession,
+    create_person: Callable[[dict[str, Any] | None], UUID],
+    create_facet: Callable[[dict[str, Any]], UUID],
+    create_class: Callable[[dict[str, Any]], UUID],
+    create_address: Callable[[dict[str, Any]], UUID],
+) -> None:
+    """A rule grants on the objects its condition names, and on no others.
+
+    The condition is read from the row and evaluated against the caller's token,
+    so the rule here reaches the address of the caller's own person alone. The
+    role is one the migrated policies do not already name.
+    """
+    caller = create_person(
+        {"given_name": "Bruce", "surname": "Lee", "uuid": str(BRUCE_UUID)}
+    )
+    other = create_person(None)
+    facet = create_facet(
+        {"user_key": "employee_address_type", "validity": {"from": "2000-01-01"}}
+    )
+    address_type = create_class(
+        {
+            "facet_uuid": str(facet),
+            "user_key": "email",
+            "name": "Email",
+            "scope": "EMAIL",
+            "validity": {"from": "2000-01-01"},
+        }
+    )
+    mine, theirs = (
+        create_address(
+            {
+                "address_type": str(address_type),
+                "person": str(person),
+                "value": value,
+                "validity": {"from": "2000-01-01"},
+            }
+        )
+        for person, value in (
+            (caller, "first@example.org"),
+            (other, "second@example.org"),
+        )
+    )
+    empty_db.add(
+        Policy(
+            name="Auditor of their own",
+            role="auditor",
+            read_rules=[
+                PolicyReadRule(
+                    collection=Collection.Address,
+                    graphql_version=LATEST_VERSION.value,
+                    condition='{"employee": {"uuids": [token.uuid]}}',
+                    fields=[PolicyReadRuleField(field="value")],
+                )
+            ],
+        )
+    )
+    await empty_db.flush()
+    policy_loader: DataLoader[int, list[Rule]] = DataLoader(
+        load_fn=partial(
+            policy_load_fn, empty_db, get_settings(), token_getter_of("auditor")
+        )
+    )
+
+    allowed = await access_load_fn(
+        empty_db,
+        policy_loader,
+        [
+            AccessKey(Collection.Address, mine, "value"),
+            AccessKey(Collection.Address, theirs, "value"),
         ],
     )
 
