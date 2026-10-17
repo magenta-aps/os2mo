@@ -317,6 +317,58 @@ async def test_access_log_filters(
 
 
 @pytest.mark.integration_test
+@pytest.mark.envvar({"ACCESS_LOG_ENABLE": "True"})
+@pytest.mark.usefixtures("empty_db")
+@pytest.mark.parametrize(
+    "named_models",
+    [
+        [],
+        ["PERSON"],
+        ["FACET"],
+        ["PERSON", "FACET"],
+    ],
+)
+async def test_access_log_filter_ids(
+    graphapi_post: GraphAPIPost, named_models: list[str]
+) -> None:
+    """Only the entries named by `ids` are read."""
+    # Reading employees and facets logs an entry of each
+    response = graphapi_post(
+        """
+        query {
+          employees { objects { uuid } }
+          facets { objects { uuid } }
+        }
+        """
+    )
+    assert response.errors is None
+
+    query = """
+        query ReadAccessLog($filter: AccessLogFilter) {
+          access_log(filter: $filter) {
+            objects {
+              id
+              model
+            }
+          }
+        }
+    """
+    response = graphapi_post(query)
+    assert response.errors is None
+    objects = response.data["access_log"]["objects"]
+    ids = {entry["model"]: entry["id"] for entry in objects}
+    assert len(ids) == len(objects)
+    assert ids.keys() == {"FACET", "PERSON"}
+
+    named = {model: ids[model] for model in named_models}
+    response = graphapi_post(query, {"filter": {"ids": list(named.values())}})
+    assert response.errors is None
+    objects = response.data["access_log"]["objects"]
+    assert len(objects) == len(named)
+    assert {entry["model"]: entry["id"] for entry in objects} == named
+
+
+@pytest.mark.integration_test
 @pytest.mark.envvar({"ACCESS_LOG_ENABLE": "False"})
 async def test_access_log_disabled(empty_db: AsyncSession) -> None:
     """Disabled access log writes nothing."""
