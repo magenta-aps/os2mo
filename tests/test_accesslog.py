@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MPL-2.0
 import json
 from collections.abc import Callable
+from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from typing import Any
@@ -19,6 +20,7 @@ from more_itertools import flatten
 from more_itertools import one
 from sqlalchemy import delete
 from sqlalchemy import select
+from sqlalchemy import update
 
 from mora.access_log import access_log
 from mora.auth.keycloak.models import Token
@@ -366,6 +368,70 @@ async def test_access_log_filter_ids(
     objects = response.data["access_log"]["objects"]
     assert len(objects) == len(named)
     assert {entry["model"]: entry["id"] for entry in objects} == named
+
+
+@pytest.mark.integration_test
+@pytest.mark.envvar({"ACCESS_LOG_ENABLE": "True"})
+@pytest.mark.parametrize(
+    "bounds,expected",
+    [
+        # No bounds
+        ({}, {"PERSON", "FACET", "CLASS"}),
+        # Both bounds are inclusive
+        ({"start": "2024-02-01T00:00:00+00:00"}, {"FACET", "CLASS"}),
+        ({"end": "2024-02-01T00:00:00+00:00"}, {"PERSON", "FACET"}),
+        (
+            {"start": "2024-02-01T00:00:00+00:00", "end": "2024-02-01T00:00:00+00:00"},
+            {"FACET"},
+        ),
+    ],
+)
+async def test_access_log_filter_time(
+    empty_db: AsyncSession,
+    graphapi_post: GraphAPIPost,
+    bounds: dict[str, str],
+    expected: set[str],
+) -> None:
+    """Only the entries logged between `start` and `end` are read."""
+    # Reading employees, facets and classes logs an entry of each
+    response = graphapi_post(
+        """
+        query {
+          employees { objects { uuid } }
+          facets { objects { uuid } }
+          classes { objects { uuid } }
+        }
+        """
+    )
+    assert response.errors is None
+    for model, time in (
+        ("Bruger", datetime(2024, 1, 1, tzinfo=UTC)),
+        ("Facet", datetime(2024, 2, 1, tzinfo=UTC)),
+        ("Klasse", datetime(2024, 3, 1, tzinfo=UTC)),
+    ):
+        await empty_db.execute(
+            update(AccessLogOperation)
+            .where(AccessLogOperation.model == model)
+            .values(time=time)
+        )
+    # A request opens its own session, so the rows must be committed to it
+    await empty_db.commit()
+
+    response = graphapi_post(
+        """
+        query ReadAccessLog($filter: AccessLogFilter) {
+          access_log(filter: $filter) {
+            objects {
+              model
+            }
+          }
+        }
+        """,
+        {"filter": bounds},
+    )
+    assert response.errors is None
+    objects = response.data["access_log"]["objects"]
+    assert {entry["model"] for entry in objects} == expected
 
 
 @pytest.mark.integration_test
